@@ -1,0 +1,417 @@
+/* --- Folder Drawer -----------------------------------------------------
+
+   Everything here hangs off two body classes set by main.js:
+
+     .folder-drawer-active   the plugin is running
+     .folder-drawer-open     the drawer is open
+
+   The collapse is gated on the first one, so switching the plugin off
+   leaves the File Explorer exactly as Obsidian draws it — no orphaned rules
+   hiding folders with no way to bring them back.
+
+   Self-contained: the ordering that used to live in the notes-before-folders
+   snippet is folded in below, so enabling this plugin is the whole change and
+   disabling it undoes the whole change.
+   ---------------------------------------------------------------------- */
+
+.nav-files-container {
+  /* scoped, not on :root — this is what lets height 0 <-> auto animate,
+     so no pixel heights have to be guessed for the drawer */
+  interpolate-size: allow-keywords;
+
+  /* The theme resolves --nav-collapse-icon-color to white at 30% alpha,
+     which is invisible on a light background — so the arrows never drew and
+     the folder names just looked indented into nothing. Re-point it at the
+     theme's own faint-text colour, which is defined for both schemes. */
+  --nav-collapse-icon-color: var(--text-faint);
+
+  --folder-drawer-gap: 12px;
+  --folder-drawer-ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --folder-drawer-open: 280ms;
+  --folder-drawer-shut: 220ms;
+
+  /* The band the first folder opens above itself for the header to sit in.
+     A section header belongs to the group beneath it, so it sits nearer that
+     group than the notes above — but 2px read as collision, not grouping.
+     16 above, 8 below. */
+  --folder-drawer-band-top: 16px;
+  --folder-drawer-band-row: 20px;
+  --folder-drawer-band-bottom: 8px;
+  --folder-drawer-band: calc(
+    var(--folder-drawer-band-top) + var(--folder-drawer-band-row) +
+      var(--folder-drawer-band-bottom)
+  );
+}
+
+/* A pointer can hit a 20px strip; a fingertip cannot. On touch the header's
+   row grows to Obsidian's own smallest touch size, which widens the hit area
+   without moving the label — the box grows around it, and it already spans
+   the full width of the sidebar. The surrounding margins tighten a little to
+   pay for it, so the band ends up only 6px taller than on desktop. */
+
+body.is-mobile .nav-files-container {
+  --folder-drawer-band-top: 14px;
+  --folder-drawer-band-row: var(--touch-size-xs, 30px);
+  --folder-drawer-band-bottom: 6px;
+}
+
+/* --- Ordering ----------------------------------------------------------
+   main.js wraps the File Explorer's own sorter so files come before folders,
+   so by the time any of this runs the DOM is already in the right order and
+   nothing here needs an `order` property. That matters: the explorer is
+   virtualised and builds rows from its sorted model, so CSS reordering
+   silently stops working the moment the tree outgrows the viewport.
+
+   Flex is kept only to stop the folder gap below from collapsing into the
+   row margins; it changes nothing about sequence. */
+
+.workspace-leaf-content[data-type="file-explorer"] .nav-files-container > div,
+.workspace-leaf-content[data-type="file-explorer"] .nav-folder-children {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Nested lists have no header to mark the join, so they get a plain gap
+   above their first folder instead — and only when a visible note sits
+   above it, so a folder-only list opens with no stray space. Every folder
+   claims the gap, then the ones following a visible folder give it back,
+   leaving exactly the first. The :not([style*=...]) skips rows hidden by
+   OA-file-hider, which sets display:none inline. */
+
+.workspace-leaf-content[data-type="file-explorer"]
+  .nav-folder-children > .tree-item.nav-folder {
+  margin-top: var(--folder-drawer-gap);
+}
+
+.workspace-leaf-content[data-type="file-explorer"]
+  .nav-folder-children
+  > .tree-item.nav-folder:not([style*="display: none"])
+  ~ .tree-item.nav-folder {
+  margin-top: 0;
+}
+
+.workspace-leaf-content[data-type="file-explorer"]
+  .nav-folder-children:not(:has(> .tree-item.nav-file:not([style*="display: none"])))
+  > .tree-item.nav-folder {
+  margin-top: 0;
+}
+
+/* folder-note-spacing.css opens its gap below the last folder, which was the
+   join in the default order and is nothing now. Cancel it while this plugin
+   runs; (0,7,0) beats its (0,5,0). Disable the plugin and that snippet takes
+   over again untouched, which is the point of leaving it installed. */
+
+body.folder-drawer-active
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container .tree-item.nav-folder + .tree-item.nav-file {
+  margin-top: 0;
+}
+
+/* --- Arrow alignment ---------------------------------------------------
+   Obsidian parks each folder's collapse arrow in the indent gutter with
+   margin-inline-start: -20px, leaving it 20px to the left of where note
+   titles begin. Dropping that pull lands every arrow — at every depth, since
+   the pull is the same at every depth — exactly on the note-title column.
+   The folder name then clears the arrow by its own 16px plus a 4px gap.
+
+   Both the indent and its !important live inline on .tree-item-self, and an
+   inline !important cannot be overridden from a stylesheet, so neither rule
+   argues with it: they sit on its children instead. The name takes a margin
+   rather than padding so its box starts where its text does, which keeps
+   the ellipsis honest on long folder names. And the theme centres a 10px
+   glyph in a 16px box, which would leave the arrow 3px right of the column,
+   so the box's contents are left-aligned too — it is the glyph that has to
+   land on the column, not the box around it. */
+
+.workspace-leaf-content[data-type="file-explorer"]
+  .nav-folder-title > .tree-item-icon.collapse-icon {
+  margin-inline-start: 0;
+  justify-content: flex-start;
+}
+
+.workspace-leaf-content[data-type="file-explorer"]
+  .nav-folder-title > .tree-item-inner {
+  margin-inline-start: 20px;
+}
+
+/* The indent guide hangs under the arrow it belongs to — Obsidian centres it
+   on the collapse arrow (old glyph 19-29, guide at 24). The glyph moved right
+   by 17px, so the guide follows by the same 17: 12px of stock margin + 17. */
+
+.workspace-leaf-content[data-type="file-explorer"]
+  .nav-folder-children {
+  margin-inline-start: 29px;
+}
+
+/* --- The header --------------------------------------------------------
+   The header is not a row in the list. The first folder's row opens a band
+   above itself with padding-top, and the header is positioned absolutely
+   into that band — so it adds no height of its own and the virtualiser,
+   which measures rows and deletes anything it did not build, never has to
+   account for it. main.js explains what went wrong when it was a row.
+
+   content-box so the band is added to the row's height rather than carved
+   out of it: shut, the row collapses to the band and nothing else; open, it
+   is the band plus the folder. And it keeps the open animation linear
+   instead of standing still for its first 44 pixels.
+
+   Indented 24px so the label starts on the note-title column, and padded
+   8px on the right so the chevron lands on the same column as the folder
+   note-counts. */
+
+.folder-drawer-seam {
+  position: relative;
+  box-sizing: content-box;
+  padding-top: var(--folder-drawer-band);
+}
+
+/* Height, not `bottom`: an absolute box is placed against the padding box of
+   the whole row, which is the band plus the folder when the drawer is open,
+   so anchoring its bottom would stretch it over the folder's own title. */
+
+.folder-drawer-header {
+  position: absolute;
+  top: var(--folder-drawer-band-top);
+  left: 0;
+  right: 0;
+  height: var(--folder-drawer-band-row);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--size-4-2);
+  padding: 3px 8px 3px 24px;
+  border-radius: var(--radius-s);
+  cursor: var(--cursor);
+  user-select: none;
+  -webkit-user-select: none;
+
+  /* Touch housekeeping, all three aimed at iOS. `manipulation` drops the
+     double-tap-to-zoom wait, so the drawer answers the first tap rather than
+     300ms later. The tap highlight is a grey box the shape of the whole band,
+     which reads as a glitch; :active below replaces it with the same hover
+     tint the pointer gets. And the callout is the magnifier-and-Copy sheet a
+     held finger raises over text — the label is a control, not a quotation. */
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+.folder-drawer-header-label {
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  transition: color 160ms ease;
+}
+
+.folder-drawer-header-chevron {
+  display: flex;
+  align-items: center;
+  color: var(--text-faint);
+  transition:
+    transform var(--folder-drawer-open) var(--folder-drawer-ease),
+    color 160ms ease;
+}
+
+.folder-drawer-header-chevron .svg-icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Mobile sets --nav-item-size to --font-ui-medium, so every name around the
+   header grows by two points. Held at 11px the label would stop reading as
+   quiet and start reading as unfinished; one point back keeps the same
+   relationship to its neighbours that it has on desktop. */
+
+body.is-mobile .folder-drawer-header-label {
+  font-size: 12px;
+}
+
+body.is-mobile .folder-drawer-header-chevron .svg-icon {
+  width: 15px;
+  height: 15px;
+}
+
+/* Down when shut — the folders are below, and that is where they come from.
+   Up when open, because the same click now puts them away. */
+
+body.folder-drawer-open .folder-drawer-header-chevron {
+  transform: rotate(180deg);
+}
+
+/* Fenced behind a hover query because a touchscreen has no hover to leave.
+   Tapping an element with a :hover rule latches it — the header would stay
+   lit after every toggle, and the highlight would then mean nothing, since
+   it is also how the open state is signalled. */
+
+@media (hover: hover) {
+  .folder-drawer-header:hover {
+    background-color: var(--nav-item-background-hover);
+  }
+
+  .folder-drawer-header:hover .folder-drawer-header-label,
+  .folder-drawer-header:hover .folder-drawer-header-chevron {
+    color: var(--text-muted);
+  }
+}
+
+/* What a finger gets instead: the same tint, for exactly as long as the
+   press lasts. It is the whole feedback loop on touch, so it is not
+   conditional — a mouse press gets it too, which is what a button does. */
+
+.folder-drawer-header:active {
+  background-color: var(--nav-item-background-hover);
+}
+
+body.folder-drawer-open .folder-drawer-header-label,
+body.folder-drawer-open .folder-drawer-header-chevron {
+  color: var(--text-muted);
+}
+
+.folder-drawer-header:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+/* --- The drawer --------------------------------------------------------
+   Shut is the resting state. Height collapses to nothing and the rows stop
+   taking clicks, but the folders stay in the tree: still searchable, still
+   reachable from the Quick Switcher, still the target of every link in the
+   vault. The band the first row holds open is padding, so it survives the
+   collapse and the header stays where it is. */
+
+body.folder-drawer-active
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder {
+  height: 0;
+  margin-top: 0;
+  overflow: hidden;
+}
+
+/* The fade sits on the rows' contents rather than on the rows. A row at
+   opacity 0 would take the header in its band down with it, and pointer
+   events with it — leaving the one control that reopens the drawer both
+   invisible and unclickable. */
+
+body.folder-drawer-active
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder > .tree-item-self,
+body.folder-drawer-active
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder > .nav-folder-children {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.folder-drawer-active.folder-drawer-open
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder {
+  height: auto;
+}
+
+body.folder-drawer-active.folder-drawer-open
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder > .tree-item-self,
+body.folder-drawer-active.folder-drawer-open
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder > .nav-folder-children {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Clipping a row to nothing hides it from the eye, not from the tree: the
+   files inside an expanded folder keep their real heights, and the model
+   goes on counting every one of them. A shut drawer over one expanded
+   folder measured 55,000px of scroll under thirteen notes. display:none
+   is the one state Obsidian's measurer reads as "no height at all", so the
+   resting shut state uses it — never mid-toggle, where the rows still have
+   an animation to run. */
+
+body.folder-drawer-active:not(.folder-drawer-open):not(.folder-drawer-animating)
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder > .nav-folder-children {
+  display: none;
+}
+
+/* Motion is armed only for the length of a toggle, by a class main.js adds
+   and then takes away. A permanent `transition: height` would animate every
+   height change these rows ever make — so expanding a subfolder would slide
+   instead of appear, and would fight Obsidian's own scroll-into-view, which
+   measures a height that is still moving. The drawer animates; the tree
+   behaves exactly as it always has. */
+
+body.folder-drawer-animating
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder {
+  transition: height var(--folder-drawer-shut) var(--folder-drawer-ease);
+}
+
+body.folder-drawer-animating
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder > .tree-item-self,
+body.folder-drawer-animating
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder > .nav-folder-children {
+  transition: opacity 140ms ease-in;
+}
+
+body.folder-drawer-animating.folder-drawer-open
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder {
+  transition: height var(--folder-drawer-open) var(--folder-drawer-ease);
+}
+
+body.folder-drawer-animating.folder-drawer-open
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder > .tree-item-self,
+body.folder-drawer-animating.folder-drawer-open
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container > div > .tree-item.nav-folder > .nav-folder-children {
+  transition: opacity 200ms ease-out 60ms;
+}
+
+/* --- Where height cannot animate --------------------------------------
+   Everything above rests on `interpolate-size: allow-keywords`, which is what
+   makes `height: 0` -> `height: auto` a thing a browser will animate rather
+   than a swap it performs instantly. Obsidian on the desktop is Chromium and
+   has it. Obsidian on iOS is not: it renders through the system WebView, and
+   whether that engine has shipped the property depends on the iOS version the
+   phone happens to be on.
+
+   Where it is missing, `transition: height` is worse than no transition at
+   all — an uninterpolatable property does not animate smoothly, it changes
+   at one point in the timeline, so the folders would sit still and then jump.
+   Ask the engine directly and take the height animation back off the table;
+   the crossfade already in place carries the toggle on its own, and the
+   drawer opens in a single beat instead of a stalled one.
+
+   The rest of the plugin — the ordering, the band, the collapse, the
+   measurement — never depended on this and is untouched. */
+
+@supports not (interpolate-size: allow-keywords) {
+  body.folder-drawer-animating
+    .workspace-leaf-content[data-type="file-explorer"]
+    .nav-files-container > div > .tree-item.nav-folder,
+  body.folder-drawer-animating.folder-drawer-open
+    .workspace-leaf-content[data-type="file-explorer"]
+    .nav-files-container > div > .tree-item.nav-folder {
+    transition: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.folder-drawer-animating
+    .workspace-leaf-content[data-type="file-explorer"]
+    .nav-files-container > div > .tree-item.nav-folder,
+  body.folder-drawer-animating
+    .workspace-leaf-content[data-type="file-explorer"]
+    .nav-files-container > div > .tree-item.nav-folder > .tree-item-self,
+  body.folder-drawer-animating
+    .workspace-leaf-content[data-type="file-explorer"]
+    .nav-files-container > div > .tree-item.nav-folder > .nav-folder-children,
+  .folder-drawer-header-chevron {
+    transition-duration: 1ms;
+  }
+}

@@ -1,0 +1,8 @@
+# Local development: the path this plugin installs into.
+.dev-vault
+
+# Plugin state, written by Obsidian at runtime.
+data.json
+
+# macOS
+.DS_Store
