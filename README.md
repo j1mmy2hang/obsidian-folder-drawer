@@ -85,6 +85,27 @@ hardware:
   half-running, and the crossfade carries the toggle on its own — so the drawer
   opens in one beat instead of a stalled one. Everything else is unaffected.
 
+## Room to scroll
+
+On the desktop the File Explorer's list stops dead at both ends, because
+Chromium does not rubber-band inner scrollers — only the page itself. So the
+plugin pads the scroller at the top and bottom with `--folder-drawer-tail`
+(`max(80px, 12vh)`), which stands in for the elastic: the first and last rows
+have somewhere to go, and a bottom fade no longer eats the final note at the
+moment you scroll to reach it.
+
+This is desktop-only on purpose. iOS rubber-bands an inner scroller natively,
+so it already has somewhere to go at both ends; padding there would just be
+dead space under a list that already moves properly. `overscroll-behavior` is
+left alone everywhere so the native bounce survives — `contain` still bounces,
+and only `none` would kill it.
+
+The padding sits on `.nav-files-container`, the element that actually scrolls,
+so it extends the scrollable area without entering the content. The virtualiser
+measures the distance from one row's top to the next, and this is outside every
+row — verified by stepping `scrollTop` across the full range and watching an
+anchor row, which does not move.
+
 ## Notes
 
 - The plugin also sorts files above folders. That used to be a separate CSS
