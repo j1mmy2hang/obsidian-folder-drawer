@@ -258,11 +258,16 @@ body.folder-drawer-open .folder-drawer-header-chevron {
 }
 
 /* What a finger gets instead: the same tint, for exactly as long as the
-   press lasts. It is the whole feedback loop on touch, so it is not
-   conditional — a mouse press gets it too, which is what a button does. */
+   press lasts — the whole feedback loop on touch, where there is no hover to
+   carry it. Fenced to the devices that need it rather than left global, so
+   the desktop header behaves exactly as it did before any of this: a mouse
+   already gets the hover tint on the way to the click, and adding a press
+   flash on top would be a new thing appearing on a surface that was done. */
 
-.folder-drawer-header:active {
-  background-color: var(--nav-item-background-hover);
+@media (hover: none) {
+  .folder-drawer-header:active {
+    background-color: var(--nav-item-background-hover);
+  }
 }
 
 body.folder-drawer-open .folder-drawer-header-label,
