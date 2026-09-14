@@ -30,29 +30,39 @@
   --folder-drawer-open: 280ms;
   --folder-drawer-shut: 220ms;
 
-  /* The band the first folder opens above itself for the header to sit in.
-     A section header belongs to the group beneath it, so it sits nearer that
-     group than the notes above — but 2px read as collision, not grouping.
-     16 above, 8 below. */
-  --folder-drawer-band-top: 16px;
-  --folder-drawer-band-row: 20px;
-  --folder-drawer-band-bottom: 8px;
-  --folder-drawer-band: calc(
-    var(--folder-drawer-band-top) + var(--folder-drawer-band-row) +
-      var(--folder-drawer-band-bottom)
+  /* The band the first folder opens above itself for the header to sit in,
+     and where in that band the header's centre line falls. A section header
+     belongs to the group beneath it, so it sits nearer that group than the
+     notes above — but 2px read as collision, not grouping. 44px of band with
+     the centre at 26 leaves 16 above the header and 8 below it.
+
+     The centre is the anchor rather than the top edge because the box around
+     it is no longer a fixed size: it grows and shrinks with the row height
+     below, and anchoring the top would drag the label with it. */
+  --folder-drawer-band: 44px;
+  --folder-drawer-band-center: 26px;
+
+  /* The header's box is the same height as a note's or a folder's, so its
+     hover highlight is the same shape as every other one in the sidebar.
+     Obsidian builds a .tree-item-self out of one line of text plus
+     --nav-item-padding above and below, so repeating that arithmetic here
+     lands on the same number — and keeps landing on it when the theme, the
+     base font size or mobile changes --nav-item-size underneath. Fallbacks
+     because an undefined variable would poison the whole calc. */
+  --folder-drawer-band-row: calc(
+    var(--nav-item-size, 13px) * var(--line-height-tight, 1.3) +
+      2 * var(--size-4-1, 4px)
   );
 }
 
-/* A pointer can hit a 20px strip; a fingertip cannot. On touch the header's
-   row grows to Obsidian's own smallest touch size, which widens the hit area
-   without moving the label — the box grows around it, and it already spans
-   the full width of the sidebar. The surrounding margins tighten a little to
-   pay for it, so the band ends up only 6px taller than on desktop. */
+/* Mobile scales --nav-item-size up, so the row calculation above already
+   gives the header a bigger box on a phone — the same bigger box every note
+   around it gets, which is the point. Only the band needs saying: a little
+   more room around a taller header, kept in the same proportion. */
 
 body.is-mobile .nav-files-container {
-  --folder-drawer-band-top: 14px;
-  --folder-drawer-band-row: var(--touch-size-xs, 30px);
-  --folder-drawer-band-bottom: 6px;
+  --folder-drawer-band: 48px;
+  --folder-drawer-band-center: 28px;
 }
 
 /* --- Ordering ----------------------------------------------------------
@@ -171,7 +181,9 @@ body.folder-drawer-active
 
 .folder-drawer-header {
   position: absolute;
-  top: var(--folder-drawer-band-top);
+  top: calc(
+    var(--folder-drawer-band-center) - var(--folder-drawer-band-row) / 2
+  );
   left: 0;
   right: 0;
   height: var(--folder-drawer-band-row);

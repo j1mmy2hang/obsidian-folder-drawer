@@ -67,8 +67,11 @@ The File Explorer, its virtualiser and its sorter are the same code on iOS and
 Android, so both mechanisms above hold as they are. What changes is the
 hardware:
 
-- **Touch targets.** The header grows to Obsidian's own smallest touch size
-  under `body.is-mobile`, and it already spans the full width of the sidebar.
+- **Touch targets.** The header's box is built from the same arithmetic
+  Obsidian uses for a row — one line of text plus `--nav-item-padding` — so it
+  is exactly as tall as the notes and folders around it, and grows with them
+  when mobile scales `--nav-item-size` up. It already spans the full width of
+  the sidebar, so the hit area is generous without being a special case.
 - **Hover.** Hover styling is fenced behind `@media (hover: hover)`, because a
   tap on an element with a `:hover` rule latches it — the header would stay lit
   after every toggle. An `:active` state answers the press instead.
