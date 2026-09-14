@@ -117,40 +117,6 @@ body.folder-drawer-active
   margin-top: 0;
 }
 
-/* --- Room below the list -----------------------------------------------
-   The list stopped dead 24px from the bottom edge — less than the 32px a
-   bottom fade typically covers, so the final row was being faded out at the
-   exact moment you had scrolled far enough to reach it. The tail gives the
-   last note somewhere to go, and gives the scroll somewhere to keep going.
-
-   Viewport-relative rather than a fixed number, so it holds its proportion
-   on a phone and on a tall desktop sidebar, with a floor for short windows.
-
-   It sits on .nav-files-container because that is the element that actually
-   scrolls. Padding there extends the scrollable area without going into the
-   content, so the virtualiser never sees it: that machinery measures the
-   distance from one row's top to the next, and this is outside every row.
-
-   Desktop only, and that is the whole point of the rule. iOS rubber-bands an
-   inner scroller natively, so it already has somewhere to go at both ends and
-   needs no help; Chromium does not bounce inner scrollers at all, so on the
-   desktop the list simply stopped dead. Padding is what stands in for the
-   elastic there. Adding it on the phone as well would just be dead space
-   under a list that already moves properly, so `body:not(.is-mobile)` keeps
-   it off. overscroll-behavior is deliberately left alone everywhere, so iOS
-   can still do its own thing — `contain` bounces, only `none` would kill it,
-   and nothing here sets either. */
-
-body:not(.is-mobile)
-  .workspace-leaf-content[data-type="file-explorer"] .nav-files-container {
-  /* Small now that the band does the work. The elastic is what keeps the list
-     from ending abruptly; this is only breathing room, and the bottom gets
-     more of it than the top because a bottom fade sits over that edge and
-     would otherwise be dissolving the last note just as you reach it. */
-  padding-top: 16px;
-  padding-bottom: 40px;
-}
-
 /* --- Arrow alignment ---------------------------------------------------
    Obsidian parks each folder's collapse arrow in the indent gutter with
    margin-inline-start: -20px, leaving it 20px to the left of where note
