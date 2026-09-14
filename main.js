@@ -64,11 +64,19 @@
  *
  * On phones and tablets
  * ---------------------
- * Nothing here is desktop-only: the File Explorer, its virtualiser and its
- * sorter are the same code on iOS and Android, so the two things this plugin
- * does — reorder at the source, park the header inside a row — hold as they
- * are. What changes is the hardware, and the differences are handled where
- * they belong:
+ * The File Explorer, its virtualiser and its sorter are the same code on iOS
+ * and Android, so the two mechanisms above hold as they are. One thing about
+ * the phone is not cosmetic, though, and it breaks the first of them:
+ *
+ *   **The File Explorer may not exist yet when this plugin looks for it.**
+ *   Obsidian defers a sidebar leaf's view until the leaf is shown, and on a
+ *   phone the explorer lives in a drawer that starts closed. The leaf is
+ *   there, `leaf.view` answers to the right view type — and it is a
+ *   placeholder with no getSortedFolderItems to wrap. Desktop never meets
+ *   this because its sidebar is open at startup. loadExplorers below asks
+ *   for the real view instead of waiting to be handed one.
+ *
+ * The rest is hardware, handled where it belongs:
  *
  *   - Touch, in styles.css. The header grows to a real tap target under
  *     `body.is-mobile`, hover styling is fenced behind `@media (hover: hover)`
@@ -106,13 +114,19 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     document.body.classList.add(ACTIVE_CLASS);
     document.body.classList.toggle(OPEN_CLASS, this.open);
 
-    /* Both of these wait for the layout. On a cold start plugins load before
+    /* All of these wait for the layout. On a cold start plugins load before
        the workspace is built, so there is no File Explorer leaf yet and no
        prototype to patch — doing it here would silently do nothing and leave
-       the folders on top. layout-change retries it for explorers that appear
-       later, and patchSort is a no-op once it has taken. */
+       the folders on top. The events retry it for explorers that appear or
+       load later, and patchSort is a no-op once it has taken.
+
+       active-leaf-change is in the list for the phone: opening the drawer
+       there is not always a layout change, but it does change which leaf is
+       active, so it is the event that fires when the File Explorer finally
+       arrives. */
     this.app.workspace.onLayoutReady(() => this.refresh());
     this.registerEvent(this.app.workspace.on("layout-change", () => this.refresh()));
+    this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refresh()));
 
     this.addCommand({
       id: "toggle",
@@ -131,9 +145,41 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.remeasure();
   }
 
-  refresh() {
+  /* Nothing here can run against a view that has not been built yet, so
+     resolving the deferred ones comes first. See loadExplorers. */
+  async refresh() {
+    try {
+      await this.loadExplorers();
+    } catch (e) {
+      /* A leaf that refuses to load is not worth failing the rest over: the
+         next event tries again. */
+    }
     this.patchSort();
     this.mountAll();
+  }
+
+  /* Obsidian does not build a sidebar leaf's view until the leaf is actually
+     shown — it parks a placeholder there instead, and `leaf.view` is that
+     placeholder, not a FileExplorerView. The placeholder carries no
+     getSortedFolderItems, so patchSort finds nothing to wrap.
+
+     On the desktop this never came up: the sidebar is open at startup, so the
+     explorer is real by the time layout-ready fires. On a phone the File
+     Explorer lives in a drawer that starts *closed*, so the leaf is deferred,
+     the sort is never patched, and the folders sit on top of the notes —
+     which is the whole thing this plugin exists to undo.
+
+     So ask for the real view rather than waiting to be handed one. It costs
+     building the file tree at startup, which the desktop does anyway, and it
+     is the one view this plugin has any business loading. Guarded by typeof
+     for Obsidian builds older than deferred views, where the question does
+     not arise. */
+  async loadExplorers() {
+    const deferred = this.app.workspace
+      .getLeavesOfType("file-explorer")
+      .filter((leaf) => leaf.isDeferred && typeof leaf.loadIfDeferred === "function");
+
+    if (deferred.length) await Promise.all(deferred.map((leaf) => leaf.loadIfDeferred()));
   }
 
   /* --- ordering -------------------------------------------------------- */
@@ -184,9 +230,14 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.originalSort = null;
   }
 
+  /* Deferred leaves are filtered out rather than mapped over: their view is a
+     placeholder that answers to the same view type and has a containerEl, so
+     it passes every duck-type below while carrying none of the machinery this
+     plugin reaches for. */
   explorerViews() {
     return this.app.workspace
       .getLeavesOfType("file-explorer")
+      .filter((leaf) => !leaf.isDeferred)
       .map((leaf) => leaf.view)
       .filter((view) => view && view.containerEl);
   }

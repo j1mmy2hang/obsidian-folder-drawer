@@ -1,7 +1,7 @@
 {
   "id": "folder-drawer",
   "name": "Folder Drawer",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "minAppVersion": "1.5.0",
   "description": "Closes the File Explorer's folders behind a FOLDERS header, leaving only the loose notes at the vault root.",
   "author": "Jimmy Zhang",
