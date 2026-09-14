@@ -85,26 +85,58 @@ hardware:
   half-running, and the crossfade carries the toggle on its own — so the drawer
   opens in one beat instead of a stalled one. Everything else is unaffected.
 
-## Room to scroll
+## Elastic scrolling
 
-On the desktop the File Explorer's list stops dead at both ends, because
-Chromium does not rubber-band inner scrollers — only the page itself. So the
-plugin pads the scroller at the top and bottom with `--folder-drawer-tail`
-(`max(80px, 12vh)`), which stands in for the elastic: the first and last rows
-have somewhere to go, and a bottom fade no longer eats the final note at the
-moment you scroll to reach it.
+On the desktop the File Explorer's list used to stop dead at both ends.
+Chromium doesn't rubber-band inner scrollers — only the page itself — so a
+sidebar hits its limit with a thud while every native list on the machine gives
+a little.
 
-This is desktop-only on purpose. iOS rubber-bands an inner scroller natively,
-so it already has somewhere to go at both ends; padding there would just be
-dead space under a list that already moves properly. `overscroll-behavior` is
-left alone everywhere so the native bounce survives — `contain` still bounces,
-and only `none` would kill it.
+The plugin adds the effect back. Push against either end and the list stretches
+past its edge and settles back: 90ms out, 750ms home, with the give
+proportional to how hard you pushed.
 
-The padding sits on `.nav-files-container`, the element that actually scrolls,
-so it extends the scrollable area without entering the content. The virtualiser
-measures the distance from one row's top to the next, and this is outside every
-row — verified by stepping `scrollTop` across the full range and watching an
-anchor row, which does not move.
+The behaviour and its tuning come from
+[atomiks/elastic-scroll-polyfill](https://github.com/atomiks/elastic-scroll-polyfill)
+(MIT), with three changes made for this host:
+
+- **No wrapper.** The polyfill wraps the scroller's contents in a new element
+  and moves that. Here the transform goes on the children already present,
+  because an extra div between `.nav-files-container` and its child would land
+  in the middle of this plugin's own selectors — the drawer collapses folders
+  through `.nav-files-container > div > .tree-item.nav-folder`, and a wrapper
+  pushes every one of those a level out of reach.
+- **A pixel of tolerance on the edge test.** The polyfill checks the bottom as
+  `scrollTop + offsetHeight >= scrollHeight`, exactly. That's right until the
+  content lands on a fraction: browsers round `scrollHeight` up to a whole
+  number while `scrollTop` clamps to the real maximum, so the two never meet.
+  Measured here — `scrollHeight` 756, `clientHeight` 495, `scrollTop` pinned at
+  260.5 — the bottom edge never registered at all.
+- **The gate is the gesture, not the arrival.** The polyfill only bounces when
+  `scrollTop` has moved since the last event, so it fires when you *arrive* at
+  an edge and then never again — once you're resting there `scrollTop` stops
+  changing and every further push is swallowed. Pushing against an edge that's
+  already against you is exactly when a rubber band should give, so this re-arms
+  after the wheel goes quiet: one bounce per push, and the next push gets
+  another.
+
+It runs only where it's needed. iOS and Android bounce inner scrollers
+natively; **Chromium ships the same thing in 145**, so on a new enough build
+this switches itself off and lets the browser do it properly (Obsidian is on
+142 today); and elastic scrolling is an Apple idiom, so it stays off on Windows
+and Linux, where it would read as a bug rather than a flourish.
+
+It also won't engage on a list that isn't scrolling. The plugin adds a little
+breathing room at both ends — 16px above, 40px below, the latter clearing a
+bottom fade that would otherwise dissolve the last note just as you reach it —
+and since padding counts towards `scrollHeight`, a list that fits its pane can
+still report a few pixels of scroll that exist only because of it. That's
+subtracted back out before deciding whether there's anything to bounce against.
+
+The transform sits on elements the virtualiser doesn't rebuild, and moves them
+all by the same amount — cached row heights are measured as the distance from
+one row's top to the next, so translating everything together leaves every one
+of those distances exactly as it was.
 
 ## Notes
 

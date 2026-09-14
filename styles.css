@@ -143,9 +143,12 @@ body.folder-drawer-active
 
 body:not(.is-mobile)
   .workspace-leaf-content[data-type="file-explorer"] .nav-files-container {
-  --folder-drawer-tail: max(80px, 12vh);
-  padding-top: var(--folder-drawer-tail);
-  padding-bottom: var(--folder-drawer-tail);
+  /* Small now that the band does the work. The elastic is what keeps the list
+     from ending abruptly; this is only breathing room, and the bottom gets
+     more of it than the top because a bottom fade sits over that edge and
+     would otherwise be dissolving the last note just as you reach it. */
+  padding-top: 16px;
+  padding-bottom: 40px;
 }
 
 /* --- Arrow alignment ---------------------------------------------------

@@ -91,7 +91,7 @@
  *     selection callout, and the header is a piece of chrome, not content.
  */
 
-const { Plugin, setIcon } = require("obsidian");
+const { Plugin, setIcon, Platform } = require("obsidian");
 
 const ACTIVE_CLASS = "folder-drawer-active";
 const OPEN_CLASS = "folder-drawer-open";
@@ -100,6 +100,49 @@ const HEADER_CLASS = "folder-drawer-header";
 const SEAM_CLASS = "folder-drawer-seam";
 const LABEL = "Folders";
 const ANIM_MS = 340;
+
+/* --- the rubber band ---------------------------------------------------
+   Chromium does not bounce an inner scroller. Only the page itself does on
+   macOS, so the File Explorer hits its ends with a thud while every native
+   list on the machine gives a little.
+
+   The behaviour below is atomiks/elastic-scroll-polyfill (MIT), including its
+   tuning. It is worth knowing why that library is shaped the way it is, since
+   the obvious approach is a different one: rather than follow the gesture and
+   resist it — accumulating a pull, damping it through Apple's curve, holding
+   it until the wheel goes quiet — it fires exactly one impulse at the moment
+   of impact and lets two CSS transitions carry the rest. Out fast, back slow.
+
+   That buys a great deal. It never calls preventDefault, so the scroller's
+   own behaviour is never taken away and handed back; it needs no idle timer
+   to guess when a trackpad gesture ended; and it cannot get stuck holding an
+   offset, because every transform it sets is already on its way back before
+   the next event arrives.
+
+   Its one trick is the guard below: if scrollTop has not moved since the last
+   wheel event, there is nothing to bounce about. That single line covers both
+   "you are already resting against the edge" and "this list does not scroll
+   at all", which is otherwise two checks.
+
+   Chromium ships this natively in 145. When Obsidian's Electron catches up,
+   this whole section stops running on its own. */
+const ELASTIC_EASING = "cubic-bezier(.23, 1, .32, 1)";
+const ELASTIC_OUT_MS = 90;
+const ELASTIC_BACK_MS = 750;
+const ELASTIC_INTENSITY = 0.8;
+
+/* How long the wheel must go quiet before the edge will give again. One push
+   is one bounce, however many events the push is made of: a trackpad flick
+   arrives as a burst at roughly 60Hz and macOS keeps sending decaying deltas
+   after the fingers lift, so anything shorter than the gaps inside a gesture
+   would fire repeatedly through a single shove and read as a rattle. */
+const ELASTIC_REARM_MS = 150;
+const ELASTIC_NATIVE_CHROME = 145;
+
+const chromeVersion = () => {
+  const m = /Chrome\/(\d+)/.exec(navigator.userAgent);
+  return m ? parseInt(m[1], 10) : 0;
+};
 
 /* Duck-typed, like the sort below: the items hold TFile/TFolder, and only a
    folder carries children. */
@@ -110,6 +153,8 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     const saved = await this.loadData();
     this.open = !!(saved && saved.open);
     this.headers = new WeakMap();
+    this.banded = new WeakSet();
+    this.bandReleases = [];
 
     document.body.classList.add(ACTIVE_CLASS);
     document.body.classList.toggle(OPEN_CLASS, this.open);
@@ -137,6 +182,13 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   onunload() {
     window.clearTimeout(this.animTimer);
+    this.releaseBands();
+    /* registerDomEvent takes the listeners away; the inline styles they wrote
+       are ours to clear. */
+    document.querySelectorAll(".nav-files-container > *").forEach((el) => {
+      el.style.transform = "";
+      el.style.transition = "";
+    });
     document.body.classList.remove(ACTIVE_CLASS, OPEN_CLASS, ANIM_CLASS);
     document.querySelectorAll("." + HEADER_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS));
@@ -156,6 +208,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     }
     this.patchSort();
     this.mountAll();
+    this.attachBands();
   }
 
   /* Obsidian does not build a sidebar leaf's view until the leaf is actually
@@ -358,10 +411,198 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       this.remeasure();
     }, ANIM_MS);
 
+    /* The scroller is about to change height under any held offset. */
+    this.releaseBands();
+
     this.open = open;
     document.body.classList.toggle(OPEN_CLASS, open);
     document.querySelectorAll("." + HEADER_CLASS).forEach((el) => this.syncHeader(el));
     await this.saveData({ open });
+  }
+
+  /* --- the rubber band --------------------------------------------------
+
+     Chromium does not rubber-band an inner scroller. Only the page itself
+     bounces on macOS; an overflow:auto div stops dead, which is why the File
+     Explorer hits its ends with a thud while every native list on the machine
+     gives a little. iOS has it for free — WebKit bounces inner scrollers — so
+     none of this runs there.
+
+     What follows is the effect, not a reimplementation of scrolling. The
+     scroller keeps doing its own job the entire time; this only takes over
+     the wheel once there is no scrolling left to do in that direction, and
+     hands it straight back the moment there is.
+
+     Why a transform is safe here, when so little else is: the tree is
+     virtualised and its cached row heights are measured as the distance from
+     one row's top to the next. Translating the whole content by the same
+     number leaves every one of those distances exactly as it was, and touches
+     neither scrollTop nor layout — so the model cannot drift. A per-row
+     transform, or anything that changed heights, would be a different story.
+
+     Bound per scroller rather than per view because that is the element that
+     both scrolls and gets replaced; the WeakSet keeps a rebuilt explorer from
+     collecting a second listener. */
+  attachBands() {
+    /* Three reasons not to run, all of them "something better already
+       happens here":
+
+       iOS and Android bounce an inner scroller natively — that is the whole
+       reason this is desktop-only. Chromium ships the same thing for inner
+       scrollers in 145, so on a new enough build the browser does it properly
+       and an imitation on top would fight it; Obsidian is on 142 today, and
+       this retires itself the moment its Electron catches up. And elastic
+       scrolling is an Apple idiom: Windows and Linux do not do it anywhere
+       else in the system, so doing it here would read as a bug, not a
+       flourish. The polyfill makes the same call with appleDevicesOnly. */
+    if (Platform.isMobile) return;
+    if (Platform.isMacOS === false) return;
+    if (chromeVersion() >= ELASTIC_NATIVE_CHROME) return;
+
+    for (const view of this.explorerViews()) {
+      const scroll = view.containerEl.querySelector(".nav-files-container");
+      if (scroll && !this.banded.has(scroll)) {
+        this.banded.add(scroll);
+        this.bindBand(scroll);
+      }
+    }
+  }
+
+  bindBand(scroll) {
+    /* The polyfill moves a wrapper it inserts around the scroller's contents.
+       Here the transform goes on the children that are already there, because
+       a new element between .nav-files-container and its child would land in
+       the middle of this plugin's own selectors — the drawer collapses folders
+       through `.nav-files-container > div > .tree-item.nav-folder`, and an
+       extra div pushes every one of those a level out of reach. Moving the
+       existing children reaches the same pixels and rearranges nothing.
+
+       It is also the safer of the two against the virtualiser: cached row
+       heights are measured as the distance from one row's top to the next, and
+       translating everything by the same number leaves every one of those
+       distances exactly as it was. */
+    const sheets = () => Array.from(scroll.children);
+
+    let applied = 0;
+    let transitioning = false;
+    let timer = 0;
+    let idle = 0;
+    let armed = true;
+
+    /* The breathing room styles.css adds at the two ends is padding, and
+       padding counts towards scrollHeight — so a list that fits its pane can
+       still report a few pixels of scroll that exist only because of it.
+       Subtracting it back out is the difference between "this list scrolls"
+       and "this list was given somewhere to rest". Cached against the pane's
+       height rather than read per event: a wheel arrives up to a hundred times
+       a second, and getComputedStyle would flush style each time. */
+    let slackAt = -1;
+    let slack = 0;
+    const slackNow = () => {
+      if (slackAt !== scroll.clientHeight) {
+        const cs = getComputedStyle(scroll);
+        slack = (parseFloat(cs.paddingTop) || 0) + (parseFloat(cs.paddingBottom) || 0);
+        slackAt = scroll.clientHeight;
+      }
+      return slack;
+    };
+
+    const move = (px, ms) => {
+      applied = px;
+      for (const el of sheets()) {
+        el.style.transition = `transform ${ms}ms ${ELASTIC_EASING}`;
+        el.style.transform = `translate3d(0, ${px}px, 0)`;
+      }
+    };
+
+    const settle = () => {
+      window.clearTimeout(timer);
+      armed = true;
+      applied = 0;
+      transitioning = false;
+      for (const el of sheets()) {
+        el.style.transition = "none";
+        el.style.transform = "";
+      }
+    };
+
+    this.bandReleases.push(settle);
+
+    /* The polyfill hands the two phases off with transitionend. That is the
+       precise way to do it and it is also the fragile way: a transitionend
+       that never arrives leaves the list sitting off its own edge with no
+       second event coming to put it back. It does not arrive if the transform
+       resolves to the value it already had, if the pane is hidden partway
+       through, or — measured here, which is how this was found — when two
+       impulses land inside one task and the style never gets recalculated
+       between them. The durations are ours, so time them rather than listen
+       for them: the worst a missed frame costs then is a slightly early snap,
+       instead of a list that never comes home. */
+    const bounce = (px) => {
+      transitioning = true;
+      move(px, ELASTIC_OUT_MS);
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        move(0, ELASTIC_BACK_MS);
+        timer = window.setTimeout(() => {
+          applied = 0;
+          transitioning = false;
+        }, ELASTIC_BACK_MS);
+      }, ELASTIC_OUT_MS);
+    };
+
+    this.registerDomEvent(
+      scroll,
+      "wheel",
+      (evt) => {
+        const top = scroll.scrollTop;
+
+        /* A pixel of tolerance, and it is load-bearing. The polyfill tests the
+           bottom as `scrollTop + offsetHeight >= scrollHeight`, exactly, which
+           is right until the content lands on a fraction: the browser rounds
+           scrollHeight up to a whole number while scrollTop clamps to the real
+           maximum, so the two never meet. Measured here — scrollHeight 756,
+           clientHeight 495, scrollTop pinned at 260.5 — the sum comes to 755.5
+           and the bottom edge simply never registers. */
+        const atTop = top <= 1;
+        const atBottom = top >= scroll.scrollHeight - scroll.clientHeight - 1;
+
+        /* Every event, edge or not, counts as the gesture still going. */
+        window.clearTimeout(idle);
+        idle = window.setTimeout(() => {
+          armed = true;
+        }, ELASTIC_REARM_MS);
+
+        /* Away from both ends: the list is moving under its own power, and a
+           leftover offset would ride along with it. */
+        if (!atTop && !atBottom) {
+          if (applied) settle();
+          return;
+        }
+
+        /* A list that only "scrolls" by the width of its own breathing room is
+           a list that fits, and nothing is holding it back to bounce against. */
+        if (scroll.scrollHeight - scroll.clientHeight <= slackNow() + 1) return;
+
+        /* The polyfill gates on scrollTop having moved since the last event,
+           which means it bounces when you *arrive* at the edge and then never
+           again — once you are resting there scrollTop stops changing, so every
+           further push is swallowed. Pushing against an edge that is already
+           against you is exactly when a rubber band should give, so the gate
+           here is the gesture instead: one bounce per push, and the next push
+           gets another. */
+        if (!armed || transitioning) return;
+        armed = false;
+        bounce(ELASTIC_INTENSITY * -evt.deltaY);
+      },
+      { passive: true }
+    );
+  }
+
+  /* Snap every band home. Called when the drawer toggles, because that
+     changes the scroller's height underneath a held offset. */
+  releaseBands() {
+    for (const release of this.bandReleases) release();
   }
 
   /* A toggle changes every folder row's height behind Obsidian's back. It
