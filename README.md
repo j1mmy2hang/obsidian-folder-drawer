@@ -85,6 +85,27 @@ hardware:
   half-running, and the crossfade carries the toggle on its own — so the drawer
   opens in one beat instead of a stalled one. Everything else is unaffected.
 
+## Closing the drawer
+
+Shutting the drawer from halfway down the folders used to teleport rather than
+scroll. The tree is virtualised and the virtualiser owns the scroll height
+through its pusher margins, so collapsing rows in CSS doesn't shrink
+`scrollHeight` by a pixel — nothing *could* scroll, because as far as the
+scroller was concerned nothing had got shorter. The height only dropped when
+`invalidateAll()` recomputed at the end, and by then all that was left was to
+clamp.
+
+Measured from `scrollTop` 1744: a 385px jolt as the rows began to fold, then
+nothing at all for ~300ms, then a 1359px slam to the top.
+
+So the scroll is animated deliberately — out-cubic over 220ms, matching
+`--folder-drawer-shut`, so the glide home and the fold read as one movement. It
+targets the top because a shut drawer *is* the loose root notes, which is the
+plugin's whole premise. `overflow-anchor` is switched off for the length of the
+toggle as well: the jolt was Chromium's scroll anchoring compensating for rows
+folding above the viewport, a correction nobody asked for on the one movement
+the plugin animates itself.
+
 ## Notes
 
 - The plugin also sorts files above folders. That used to be a separate CSS

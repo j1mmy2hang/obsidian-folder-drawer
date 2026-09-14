@@ -101,6 +101,10 @@ const SEAM_CLASS = "folder-drawer-seam";
 const LABEL = "Folders";
 const ANIM_MS = 340;
 
+/* Matches --folder-drawer-shut in styles.css: the scroll home and the folding
+   are the same movement, so they have to take the same time. */
+const SHUT_MS = 220;
+
 /* Duck-typed, like the sort below: the items hold TFile/TFolder, and only a
    folder carries children. */
 const isFolderItem = (item) => !!(item && item.file && Array.isArray(item.file.children));
@@ -358,10 +362,51 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       this.remeasure();
     }, ANIM_MS);
 
+    /* Shutting the drawer from halfway down the folders used to teleport.
+       Measured from scrollTop 1744: a 385px jolt as the rows began to fold,
+       then nothing at all for ~300ms, then a 1359px slam to the top.
+
+       The dead middle is the give-away. The tree is virtualised, and the
+       virtualiser owns the scroll height through its pusher margins — so
+       collapsing rows in CSS does not shrink scrollHeight by a single pixel.
+       Nothing can scroll, because as far as the scroller is concerned nothing
+       got shorter; the height only drops when invalidateAll() recomputes at
+       the end, and by then the only thing left to do is clamp. The jolt at the
+       start is Chromium's scroll anchoring reacting to rows collapsing above
+       the viewport, which styles.css now switches off for the toggle.
+
+       So the scroll is animated deliberately rather than left to fall out of
+       the layout. Shut, the list is the loose root notes, which is the whole
+       premise of the plugin, so the top is where it is going. */
+    if (!open) this.scrollHome();
+
     this.open = open;
     document.body.classList.toggle(OPEN_CLASS, open);
     document.querySelectorAll("." + HEADER_CLASS).forEach((el) => this.syncHeader(el));
     await this.saveData({ open });
+  }
+
+  /* Ease each explorer back to the top over the same time the folders take to
+     fold, so the two read as one movement. rAF rather than scrollTo's own
+     smooth behaviour: that has a duration the browser picks, and the point is
+     to match a duration that is already set in the stylesheet. */
+  scrollHome() {
+    for (const view of this.explorerViews()) {
+      const el = view.containerEl.querySelector(".nav-files-container");
+      if (!el || el.scrollTop <= 0) continue;
+
+      const from = el.scrollTop;
+      const started = performance.now();
+
+      const step = () => {
+        const t = Math.min(1, (performance.now() - started) / SHUT_MS);
+        /* Out-cubic: leaves fast, arrives gently, no overshoot. */
+        el.scrollTop = from * Math.pow(1 - t, 3);
+        if (t < 1) window.requestAnimationFrame(step);
+      };
+
+      window.requestAnimationFrame(step);
+    }
   }
 
   /* A toggle changes every folder row's height behind Obsidian's back. It

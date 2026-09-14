@@ -352,6 +352,18 @@ body.folder-drawer-active:not(.folder-drawer-open):not(.folder-drawer-animating)
   display: none;
 }
 
+/* Chromium anchors the scroll position to whatever is on screen, so when the
+   folder rows start folding above the viewport it answers by moving scrollTop
+   to compensate — measured at 385px, in one frame, before anything had even
+   visibly happened. That is a correction nobody asked for on the one movement
+   the plugin animates itself, so it is switched off for the length of it. */
+
+body.folder-drawer-animating
+  .workspace-leaf-content[data-type="file-explorer"]
+  .nav-files-container {
+  overflow-anchor: none;
+}
+
 /* Motion is armed only for the length of a toggle, by a class main.js adds
    and then takes away. A permanent `transition: height` would animate every
    height change these rows ever make — so expanding a subfolder would slide
