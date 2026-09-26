@@ -3,432 +3,290 @@
 /*
  * Folder Drawer
  *
- * The File Explorer's folders fold away behind a single FOLDERS header, so
- * the sidebar rests as the loose notes at the vault root — the things still
- * being worked out — with the library one click away.
+ * Turns the core File Explorer into two lists:
  *
- * Why this sorts rather than paints
- * ---------------------------------
- * Obsidian's File Explorer is virtualised: it only builds the rows near the
- * scroll window, and it decides which those are from its own sorted model,
- * not from what the stylesheet ends up drawing. Reordering with CSS `order`
- * therefore works only while the whole tree fits on screen. Expand one real
- * folder and the model says the notes — last in its order — are far below
- * the viewport, so it never builds them, and the notes vanish from the top
- * of a sidebar that is supposedly showing them.
+ *   the notes at the vault root   — what just arrived and is not sorted yet
+ *   PROJECTS                      — every note tagged #project/in-progress,
+ *                                   wherever it lives in the vault
  *
- * So the order is changed at the source: getSortedFolderItems is wrapped to
- * return files before folders. Obsidian then agrees with itself — model,
- * DOM, scroll height and rendering window all line up — and no CSS has to
- * lie about where anything is.
+ * Folders leave the explorer entirely; reach them through search, the Quick
+ * Switcher, or any other pane. A root note that is also an active project
+ * appears once, under Projects.
  *
- * Why the header is not a row
- * ---------------------------
- * That same virtualiser decides, on every render pass, exactly which
- * elements the list is allowed to contain: setChildrenInPlace deletes
- * anything it did not put there. A header parked between the last note and
- * the first folder is therefore removed and rebuilt several times a second
- * while scrolling — measured: 45 removals in one second — and because it
- * stands 44px tall, the content above the viewport keeps losing and
- * regaining 44px. The browser answers each loss by nudging scrollTop to
- * keep the view anchored, and that nudge is the jitter: three 44px jumps
- * in a single second of scrolling, measured before this was changed.
+ * Until 2.0 this plugin folded the folders behind a FOLDERS header instead.
+ * The header mechanism below is the same one, carrying a different label.
  *
- * Worse, the model cannot account for a row it does not know about. The
- * heights it caches are the distance from one row's top to the next, so a
- * foreign element sitting between two rows puts its height into nobody's
- * total, and the arithmetic that decides where to park the remaining rows
- * drifts from what the screen actually shows.
+ * How the list is changed
+ * -----------------------
+ * The explorer is virtualised and builds rows from its own sorted model, so
+ * the change is made where the model is made: getSortedFolderItems, wrapped
+ * (not replaced — other plugins may wrap it too, and the explorer's sort order still
+ * orders both sections). For the root it returns the loose notes, then the
+ * project notes, which are real explorer items borrowed from their folders.
+ * Each folder's own list drops its project notes, so no item is claimed by two
+ * parents: a tree item belongs to whichever list last called setChildren on it.
+ * Indentation is measured from where a row actually sits, so a borrowed row
+ * lands flush with the root notes on its own.
  *
- * So the header rides inside the first folder's row. That row opens a 44px
- * band above itself with padding-top, and the header is positioned
- * absolutely into the band, adding no height of its own. Obsidian rewrites
- * the children of .nav-folder-children, never of the row, so the header is
- * never touched; and because the band is part of a row the virtualiser
- * measures, it travels correctly every time that row is attached or
- * detached. Nothing moves that Obsidian does not already know about.
- *
- * Body classes set here, read by styles.css:
- *
- *   folder-drawer-active     the plugin is running, so the CSS may collapse
- *                            things; without it the explorer looks untouched
- *   folder-drawer-open       the drawer is open
- *   folder-drawer-animating  a toggle is in flight
- *
- * That last one matters more than it looks. A permanent `transition: height`
- * on the folder rows would animate every height change they ever make — so
- * expanding a subfolder would slide open and shove the rest of the sidebar
- * around, and Obsidian's scroll-into-view would be measuring a height that
- * is still moving. Arming motion only for the length of a toggle keeps the
- * drawer animated and leaves the tree behaving exactly as it always has.
- *
- * On phones and tablets
- * ---------------------
- * The File Explorer, its virtualiser and its sorter are the same code on iOS
- * and Android, so the two mechanisms above hold as they are. One thing about
- * the phone is not cosmetic, though, and it breaks the first of them:
- *
- *   **The File Explorer may not exist yet when this plugin looks for it.**
- *   Obsidian defers a sidebar leaf's view until the leaf is shown, and on a
- *   phone the explorer lives in a drawer that starts closed. The leaf is
- *   there, `leaf.view` answers to the right view type — and it is a
- *   placeholder with no getSortedFolderItems to wrap. Desktop never meets
- *   this because its sidebar is open at startup. loadExplorers below asks
- *   for the real view instead of waiting to be handed one.
- *
- * The rest is hardware, handled where it belongs:
- *
- *   - Touch, in styles.css. The header grows to a real tap target under
- *     `body.is-mobile`, hover styling is fenced behind `@media (hover: hover)`
- *     so a tap does not leave it stuck lit, and an `:active` state gives the
- *     press something to answer with.
- *   - WebKit, also in styles.css. `interpolate-size: allow-keywords` is what
- *     lets height animate to `auto`, and iOS renders through the system
- *     WebView, which may not have it. An `@supports not (...)` block drops
- *     the height transition there rather than leave it half-running; the
- *     crossfade carries the toggle instead.
- *   - Long-press, here. iOS answers a held finger with a context menu and a
- *     selection callout, and the header is a piece of chrome, not content.
+ * Why the heading is not a row
+ * ----------------------------
+ * The virtualiser deletes any child of the list it did not put there, and it
+ * measures each row as the distance from its top to the next row's top.
+ * Both were learned the hard way in 1.x. So the heading rides inside the
+ * first project row: that row opens a band above itself with padding-top and
+ * the heading is positioned absolutely into it, adding no height of its own.
+ * Obsidian never rewrites a row's own children, and the band is part of a
+ * row it measures, so nothing moves that Obsidian does not know about.
  */
 
-const { Plugin, setIcon } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, TFile, getAllTags, debounce } = require("obsidian");
 
 const ACTIVE_CLASS = "folder-drawer-active";
-const OPEN_CLASS = "folder-drawer-open";
-const ANIM_CLASS = "folder-drawer-animating";
-const HEADER_CLASS = "folder-drawer-header";
+const HEADING_CLASS = "folder-drawer-heading";
 const SEAM_CLASS = "folder-drawer-seam";
-const LABEL = "Folders";
-const ANIM_MS = 340;
 
-/* Matches --folder-drawer-shut in styles.css: the scroll home and the folding
-   are the same movement, so they have to take the same time. */
-const SHUT_MS = 220;
+const DEFAULT_SETTINGS = {
+  projectTag: "project/in-progress",
+  heading: "Projects",
+};
 
-/* Duck-typed, like the sort below: the items hold TFile/TFolder, and only a
-   folder carries children. */
-const isFolderItem = (item) => !!(item && item.file && Array.isArray(item.file.children));
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/* Core's comparators, word for word, keyed by the explorer's sortOrder. */
+const COMPARE = {
+  alphabetical: (a, b) => collator.compare(a.basename, b.basename),
+  alphabeticalReverse: (a, b) => -collator.compare(a.basename, b.basename),
+  byModifiedTime: (a, b) => b.stat.mtime - a.stat.mtime,
+  byModifiedTimeReverse: (a, b) => a.stat.mtime - b.stat.mtime,
+  byCreatedTime: (a, b) => b.stat.ctime - a.stat.ctime,
+  byCreatedTimeReverse: (a, b) => a.stat.ctime - b.stat.ctime,
+};
+
+/* "#Project/In-Progress" and "project/in-progress" are the same tag. */
+function normalize(tag) {
+  return tag.trim().replace(/^#+/, "").toLowerCase();
+}
 
 module.exports = class FolderDrawerPlugin extends Plugin {
   async onload() {
-    const saved = await this.loadData();
-    this.open = !!(saved && saved.open);
-    this.headers = new WeakMap();
+    const saved = (await this.loadData()) || {};
+    /* 1.x kept the drawer's open state here; there is no drawer any more. */
+    delete saved.open;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
+    this.headings = new WeakMap();
+    this.projects = new Set();
 
     document.body.classList.add(ACTIVE_CLASS);
-    document.body.classList.toggle(OPEN_CLASS, this.open);
+    this.addSettingTab(new FolderDrawerSettingTab(this.app, this));
 
-    /* All of these wait for the layout. On a cold start plugins load before
-       the workspace is built, so there is no File Explorer leaf yet and no
-       prototype to patch — doing it here would silently do nothing and leave
-       the folders on top. The events retry it for explorers that appear or
-       load later, and patchSort is a no-op once it has taken.
-
-       active-leaf-change is in the list for the phone: opening the drawer
-       there is not always a layout change, but it does change which leaf is
-       active, so it is the event that fires when the File Explorer finally
-       arrives. */
-    this.app.workspace.onLayoutReady(() => this.refresh());
+    /* Plugins load before the workspace is built, so the explorer's prototype
+       is only reachable after layout-ready. active-leaf-change is for the
+       phone, where the explorer sits in a drawer that starts closed and its
+       leaf stays deferred until opened. */
+    this.app.workspace.onLayoutReady(() => {
+      this.scan();
+      this.refresh();
+    });
     this.registerEvent(this.app.workspace.on("layout-change", () => this.refresh()));
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refresh()));
 
-    this.addCommand({
-      id: "toggle",
-      name: "Toggle folder drawer",
-      callback: () => this.setOpen(!this.open),
-    });
+    /* Tagging a note or taking the tag off is a metadata change, not a vault
+       one, so the explorer would never re-sort by itself. Only re-sort when
+       the set of projects actually changed. */
+    const rescan = debounce(() => this.rescan(), 200, true);
+    this.registerEvent(this.app.metadataCache.on("changed", rescan));
+    this.registerEvent(this.app.metadataCache.on("resolved", rescan));
+    this.registerEvent(this.app.vault.on("delete", rescan));
+    this.registerEvent(this.app.vault.on("rename", rescan));
   }
 
   onunload() {
-    window.clearTimeout(this.animTimer);
-    document.body.classList.remove(ACTIVE_CLASS, OPEN_CLASS, ANIM_CLASS);
-    document.querySelectorAll("." + HEADER_CLASS).forEach((el) => el.remove());
+    document.body.classList.remove(ACTIVE_CLASS);
+    document.querySelectorAll("." + HEADING_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS));
-    this.restoreSort();
+    this.restore();
     this.resort();
-    this.remeasure();
   }
 
-  /* Nothing here can run against a view that has not been built yet, so
-     resolving the deferred ones comes first. See loadExplorers. */
+  async saveSettings() {
+    await this.saveData(this.settings);
+    this.headings = new WeakMap();
+    document.querySelectorAll("." + HEADING_CLASS).forEach((el) => el.remove());
+    this.rescan(true);
+  }
+
+  /* --- which notes are projects ---------------------------------------- */
+
+  scan() {
+    const want = normalize(this.settings.projectTag);
+    const found = new Set();
+    if (!want) return found;
+    const cache = this.app.metadataCache;
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      const meta = cache.getFileCache(file);
+      const tags = (meta && getAllTags(meta)) || [];
+      if (tags.some((t) => ((t = normalize(t)), t === want || t.startsWith(want + "/")))) found.add(file);
+    }
+    this.projects = found;
+    return found;
+  }
+
+  rescan(force = false) {
+    const before = this.projects;
+    const after = this.scan();
+    const same = before.size === after.size && [...after].every((f) => before.has(f));
+    if (force || !same) this.resort();
+  }
+
+  /* --- the explorer ------------------------------------------------------ */
+
   async refresh() {
     try {
-      await this.loadExplorers();
+      const deferred = this.app.workspace
+        .getLeavesOfType("file-explorer")
+        .filter((leaf) => leaf.isDeferred && typeof leaf.loadIfDeferred === "function");
+      if (deferred.length) await Promise.all(deferred.map((leaf) => leaf.loadIfDeferred()));
     } catch (e) {
-      /* A leaf that refuses to load is not worth failing the rest over: the
-         next event tries again. */
+      /* The next event tries again. */
     }
-    this.patchSort();
-    this.mountAll();
+    this.patch();
   }
 
-  /* Obsidian does not build a sidebar leaf's view until the leaf is actually
-     shown — it parks a placeholder there instead, and `leaf.view` is that
-     placeholder, not a FileExplorerView. The placeholder carries no
-     getSortedFolderItems, so patchSort finds nothing to wrap.
-
-     On the desktop this never came up: the sidebar is open at startup, so the
-     explorer is real by the time layout-ready fires. On a phone the File
-     Explorer lives in a drawer that starts *closed*, so the leaf is deferred,
-     the sort is never patched, and the folders sit on top of the notes —
-     which is the whole thing this plugin exists to undo.
-
-     So ask for the real view rather than waiting to be handed one. It costs
-     building the file tree at startup, which the desktop does anyway, and it
-     is the one view this plugin has any business loading. Guarded by typeof
-     for Obsidian builds older than deferred views, where the question does
-     not arise. */
-  async loadExplorers() {
-    const deferred = this.app.workspace
-      .getLeavesOfType("file-explorer")
-      .filter((leaf) => leaf.isDeferred && typeof leaf.loadIfDeferred === "function");
-
-    if (deferred.length) await Promise.all(deferred.map((leaf) => leaf.loadIfDeferred()));
-  }
-
-  /* --- ordering -------------------------------------------------------- */
-
-  /* Wrap the view's own sorter instead of replacing it: whatever sort order
-     is set in the File Explorer still decides the order *within* each group,
-     and only the grouping is flipped. */
-  patchSort() {
-    if (this.sortProto) return;
-
-    const view = this.explorerViews()[0];
-    if (!view) return;
-
-    const proto = Object.getPrototypeOf(view);
-    if (!proto || typeof proto.getSortedFolderItems !== "function") return;
-
-    this.sortProto = proto;
-    this.originalSort = proto.getSortedFolderItems;
-
-    const original = this.originalSort;
-    const plugin = this;
-    proto.getSortedFolderItems = function (folder) {
-      const items = original.call(this, folder);
-      const files = [];
-      const folders = [];
-      for (const item of items) {
-        if (isFolderItem(item)) folders.push(item);
-        else files.push(item);
-      }
-
-      /* Which row carries the header is decided here because this is where
-         it changes: a folder created, renamed or deleted all come back
-         through the root's sort, and the answer is already in hand. */
-      if (plugin._loaded && folder && folder.isRoot && folder.isRoot()) {
-        plugin.placeHeader(this, folders);
-      }
-
-      return files.concat(folders);
-    };
-
-    this.resort();
-  }
-
-  restoreSort() {
-    if (!this.sortProto || !this.originalSort) return;
-    this.sortProto.getSortedFolderItems = this.originalSort;
-    this.sortProto = null;
-    this.originalSort = null;
-  }
-
-  /* Deferred leaves are filtered out rather than mapped over: their view is a
-     placeholder that answers to the same view type and has a containerEl, so
-     it passes every duck-type below while carrying none of the machinery this
-     plugin reaches for. */
   explorerViews() {
     return this.app.workspace
       .getLeavesOfType("file-explorer")
       .filter((leaf) => !leaf.isDeferred)
       .map((leaf) => leaf.view)
-      .filter((view) => view && view.containerEl);
+      .filter((view) => view && view.containerEl && view.fileItems);
   }
 
+  patch() {
+    if (this.proto) return;
+    const view = this.explorerViews()[0];
+    if (!view) return;
+    const proto = Object.getPrototypeOf(view);
+    if (!proto || typeof proto.getSortedFolderItems !== "function") return;
+
+    this.proto = proto;
+    this.original = proto.getSortedFolderItems;
+    const original = this.original;
+    const plugin = this;
+
+    this.wrapper = function (folder) {
+      const items = original.call(this, folder);
+      /* If another plugin wrapped this wrapper, unloading cannot unhook it;
+         the guard makes it inert instead. */
+      if (!plugin._loaded) return items;
+      const projects = plugin.projects;
+
+      if (!folder || !folder.isRoot()) {
+        return items.filter((item) => !(item && projects.has(item.file)));
+      }
+
+      const loose = items.filter((item) => item && item.file instanceof TFile && !projects.has(item.file));
+      const compare = COMPARE[this.sortOrder] || COMPARE.alphabetical;
+      const borrowed = [...projects]
+        .sort(compare)
+        .map((file) => this.fileItems[file.path])
+        .filter(Boolean);
+      /* Skip rows a file-hider has switched off: they take no space, so a
+         heading parked in one would have no band to sit in. */
+      plugin.placeHeading(this, borrowed.find((item) => item.el && item.el.style.display !== "none"));
+      return loose.concat(borrowed);
+    };
+
+    proto.getSortedFolderItems = this.wrapper;
+    this.resort();
+  }
+
+  restore() {
+    if (!this.proto) return;
+    if (this.proto.getSortedFolderItems === this.wrapper) this.proto.getSortedFolderItems = this.original;
+    this.proto = null;
+    this.original = null;
+    this.wrapper = null;
+  }
+
+  /* Rebuild every list from the sorter. Folder lists first, so each project
+     note is released by its folder before the root claims it; the root's
+     sort comes last inside view.sort(). Then drop the cached heights, since
+     the seam row's band changed behind the virtualiser's back. */
   resort() {
-    this.explorerViews().forEach((view) => {
+    for (const view of this.explorerViews()) {
       if (typeof view.requestSort === "function") view.requestSort();
-    });
-  }
-
-  /* --- the header ------------------------------------------------------ */
-
-  /* Every File Explorer leaf gets a header. The second-left-sidebar plugin
-     can put a second one on screen, and they share the one open state. */
-  mountAll() {
-    let moved = false;
-    for (const view of this.explorerViews()) {
-      if (this.placeHeader(view, rootFolders(view))) moved = true;
-    }
-    if (moved) this.remeasure();
-  }
-
-  /* Parking the header is two moves: mark the row that opens the band, and
-     put the header in it. Returns whether anything actually changed, so the
-     caller knows whether the tree needs measuring again. */
-  placeHeader(view, folders) {
-    const header = this.headerFor(view);
-    /* Skip rows a file-hider has switched off — they take no space, so a
-       header parked in one would have no band to sit in. */
-    const seam = folders.find((item) => item.el && item.el.style.display !== "none");
-
-    let changed = false;
-    view.containerEl.querySelectorAll("." + SEAM_CLASS).forEach((el) => {
-      if (seam && el === seam.el) return;
-      el.classList.remove(SEAM_CLASS);
-      changed = true;
-    });
-
-    if (!seam) {
-      if (header.parentElement) {
-        header.remove();
-        changed = true;
-      }
-      return changed;
-    }
-
-    if (!seam.el.classList.contains(SEAM_CLASS)) {
-      seam.el.classList.add(SEAM_CLASS);
-      changed = true;
-    }
-    if (seam.el.firstChild !== header) {
-      seam.el.insertBefore(header, seam.el.firstChild);
-      changed = true;
-    }
-    return changed;
-  }
-
-  headerFor(view) {
-    let header = this.headers.get(view);
-    if (!header) {
-      header = this.buildHeader();
-      this.headers.set(view, header);
-    }
-    this.syncHeader(header);
-    return header;
-  }
-
-  buildHeader() {
-    const header = createDiv({ cls: HEADER_CLASS });
-    header.setAttribute("role", "button");
-    header.setAttribute("tabindex", "0");
-    header.createSpan({ cls: HEADER_CLASS + "-label", text: LABEL });
-
-    const chevron = header.createSpan({ cls: HEADER_CLASS + "-chevron" });
-    setIcon(chevron, "chevron-down");
-
-    /* The whole band takes the click, not just the glyph: same gesture, a
-       target you do not have to aim at. It stops there too — the header sits
-       inside a folder's row now, and that row is the File Explorer's. */
-    header.addEventListener("click", (evt) => {
-      evt.stopPropagation();
-      this.setOpen(!this.open);
-    });
-    header.addEventListener("keydown", (evt) => {
-      if (evt.key === "Enter" || evt.key === " ") {
-        evt.preventDefault();
-        evt.stopPropagation();
-        this.setOpen(!this.open);
-      }
-    });
-
-    /* A long press on iOS raises the same event a right-click does, and the
-       row underneath would answer it with the first folder's context menu —
-       rename, delete — for a gesture aimed at a section header. Swallow it:
-       the header is chrome, and has no menu of its own. */
-    header.addEventListener("contextmenu", (evt) => {
-      evt.preventDefault();
-      evt.stopPropagation();
-    });
-
-    return header;
-  }
-
-  syncHeader(header) {
-    header.setAttribute("aria-expanded", String(this.open));
-    header.setAttribute("aria-label", (this.open ? "Hide" : "Show") + " folders");
-  }
-
-  /* --- toggling -------------------------------------------------------- */
-
-  async setOpen(open) {
-    /* Arm the transition before the state flips, disarm once it has run.
-       340ms clears the longest of the two durations in styles.css. */
-    document.body.classList.add(ANIM_CLASS);
-    window.clearTimeout(this.animTimer);
-    this.animTimer = window.setTimeout(() => {
-      document.body.classList.remove(ANIM_CLASS);
-      this.remeasure();
-    }, ANIM_MS);
-
-    /* Shutting the drawer from halfway down the folders used to teleport.
-       Measured from scrollTop 1744: a 385px jolt as the rows began to fold,
-       then nothing at all for ~300ms, then a 1359px slam to the top.
-
-       The dead middle is the give-away. The tree is virtualised, and the
-       virtualiser owns the scroll height through its pusher margins — so
-       collapsing rows in CSS does not shrink scrollHeight by a single pixel.
-       Nothing can scroll, because as far as the scroller is concerned nothing
-       got shorter; the height only drops when invalidateAll() recomputes at
-       the end, and by then the only thing left to do is clamp. The jolt at the
-       start is Chromium's scroll anchoring reacting to rows collapsing above
-       the viewport, which styles.css now switches off for the toggle.
-
-       So the scroll is animated deliberately rather than left to fall out of
-       the layout. Shut, the list is the loose root notes, which is the whole
-       premise of the plugin, so the top is where it is going. */
-    if (!open) this.scrollHome();
-
-    this.open = open;
-    document.body.classList.toggle(OPEN_CLASS, open);
-    document.querySelectorAll("." + HEADER_CLASS).forEach((el) => this.syncHeader(el));
-    await this.saveData({ open });
-  }
-
-  /* Ease each explorer back to the top over the same time the folders take to
-     fold, so the two read as one movement. rAF rather than scrollTo's own
-     smooth behaviour: that has a duration the browser picks, and the point is
-     to match a duration that is already set in the stylesheet. */
-  scrollHome() {
-    for (const view of this.explorerViews()) {
-      const el = view.containerEl.querySelector(".nav-files-container");
-      if (!el || el.scrollTop <= 0) continue;
-
-      const from = el.scrollTop;
-      const started = performance.now();
-
-      const step = () => {
-        const t = Math.min(1, (performance.now() - started) / SHUT_MS);
-        /* Out-cubic: leaves fast, arrives gently, no overshoot. */
-        el.scrollTop = from * Math.pow(1 - t, 3);
-        if (t < 1) window.requestAnimationFrame(step);
-      };
-
-      window.requestAnimationFrame(step);
-    }
-  }
-
-  /* A toggle changes every folder row's height behind Obsidian's back. It
-     measures the tree itself and caches what it finds, and no CSS class
-     change tells it those numbers are now wrong; left alone it goes on
-     placing rows by the old heights. That is how a shut drawer ends up with
-     fifty thousand pixels of scroll under thirteen notes — the collapsed
-     folders are clipped to nothing on screen while the model still counts
-     every file inside them. Measure again once the animation has settled. */
-  remeasure() {
-    for (const view of this.explorerViews()) {
       const scroll = view.tree && view.tree.infinityScroll;
       if (scroll && typeof scroll.invalidateAll === "function") scroll.invalidateAll();
     }
   }
+
+  /* --- the heading --------------------------------------------------------- */
+
+  placeHeading(view, first) {
+    const heading = this.headingFor(view);
+    view.containerEl.querySelectorAll("." + SEAM_CLASS).forEach((el) => {
+      if (!first || el !== first.el) el.classList.remove(SEAM_CLASS);
+    });
+    if (!first) {
+      heading.remove();
+      return;
+    }
+    first.el.classList.add(SEAM_CLASS);
+    if (first.el.firstChild !== heading) first.el.insertBefore(heading, first.el.firstChild);
+  }
+
+  headingFor(view) {
+    let heading = this.headings.get(view);
+    if (!heading) {
+      heading = createDiv({ cls: HEADING_CLASS, text: this.settings.heading });
+      /* It sits inside a note's row, and that row answers clicks, drags and
+         right-clicks for the note. The heading is chrome, so it swallows
+         them. */
+      for (const type of ["click", "auxclick", "contextmenu", "mousedown"]) {
+        heading.addEventListener(type, (evt) => {
+          evt.preventDefault();
+          evt.stopPropagation();
+        });
+      }
+      this.headings.set(view, heading);
+    }
+    return heading;
+  }
 };
 
-/* The rows Obsidian is currently holding for the vault root, in its order —
-   the same list the sort hands over, for the times nothing has sorted yet. */
-function rootFolders(view) {
-  const tree = view.tree;
-  const root = tree && tree.infinityScroll && tree.infinityScroll.rootEl;
-  const children = root && root.vChildren && root.vChildren.children;
-  return children ? children.filter(isFolderItem) : [];
+class FolderDrawerSettingTab extends PluginSettingTab {
+  constructor(app, plugin) {
+    super(app, plugin);
+    this.plugin = plugin;
+  }
+
+  display() {
+    const { containerEl } = this;
+    containerEl.empty();
+
+    new Setting(containerEl)
+      .setName("Project tag")
+      .setDesc("Notes carrying this tag, or a tag nested under it, are listed under the heading. With or without the #.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.projectTag)
+          .setValue(this.plugin.settings.projectTag)
+          .onChange(async (value) => {
+            this.plugin.settings.projectTag = normalize(value) || DEFAULT_SETTINGS.projectTag;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Heading")
+      .setDesc("The small heading between the root notes and the projects.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.heading)
+          .setValue(this.plugin.settings.heading)
+          .onChange(async (value) => {
+            this.plugin.settings.heading = value.trim() || DEFAULT_SETTINGS.heading;
+            await this.plugin.saveSettings();
+          })
+      );
+  }
 }
