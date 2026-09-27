@@ -42,6 +42,9 @@ Settings → Folder Drawer:
 
 - **Project tag**: which tag lists a note under the heading.
 - **Heading**: the heading's text.
+- **Heading link**: a note the heading opens when clicked, e.g. an index of
+  all your projects. A file name (found anywhere in the vault) or a vault path.
+  Cmd/Ctrl-click opens it in a new tab. Leave it empty for a plain heading.
 
 The explorer's own sort order orders both lists.
 

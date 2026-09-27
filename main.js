@@ -39,7 +39,7 @@
  * row it measures, so nothing moves that Obsidian does not know about.
  */
 
-const { Plugin, PluginSettingTab, Setting, TFile, getAllTags, debounce } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, TFile, Keymap, getAllTags, debounce } = require("obsidian");
 
 const ACTIVE_CLASS = "folder-drawer-active";
 const HEADING_CLASS = "folder-drawer-heading";
@@ -48,6 +48,10 @@ const SEAM_CLASS = "folder-drawer-seam";
 const DEFAULT_SETTINGS = {
   projectTag: "project/in-progress",
   heading: "Projects",
+  /* The note the heading opens. The author's own, found by file name, so a
+     fresh install on another device works with nothing to type. Empty makes
+     the heading a plain label again. */
+  headingLink: "projects.md.md",
 };
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -98,6 +102,10 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.registerEvent(this.app.metadataCache.on("resolved", rescan));
     this.registerEvent(this.app.vault.on("delete", rescan));
     this.registerEvent(this.app.vault.on("rename", rescan));
+
+    /* The heading lights up while its note is the one open, as a row does. */
+    this.registerEvent(this.app.workspace.on("file-open", () => this.syncHeadings()));
+    this.registerEvent(this.app.vault.on("rename", () => this.syncHeadings()));
   }
 
   onunload() {
@@ -232,6 +240,44 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     }
     first.el.classList.add(SEAM_CLASS);
     if (first.el.firstChild !== heading) first.el.insertBefore(heading, first.el.firstChild);
+    this.syncHeading(heading);
+  }
+
+  /* The heading's note: a vault path, or a file name found anywhere in the
+     vault. Looked up on every use, so renaming or moving it never strands
+     the heading. */
+  headingTarget() {
+    const want = (this.settings.headingLink || "").trim().replace(/^\/+/, "");
+    if (!want) return null;
+    const vault = this.app.vault;
+    const exact = vault.getAbstractFileByPath(want);
+    if (exact instanceof TFile) return exact;
+    const named = vault.getFiles().find((f) => f.name === want);
+    if (named) return named;
+    return this.app.metadataCache.getFirstLinkpathDest(want, "");
+  }
+
+  syncHeading(heading) {
+    const target = this.headingTarget();
+    const active = this.app.workspace.getActiveFile();
+    heading.toggleClass("is-clickable", !!target);
+    heading.toggleClass("is-active", !!target && active === target);
+    heading.setAttr("tabindex", target ? "0" : "-1");
+    heading.setAttr("role", target ? "link" : null);
+  }
+
+  syncHeadings() {
+    document.querySelectorAll("." + HEADING_CLASS).forEach((el) => this.syncHeading(el));
+  }
+
+  /* Opens like a row: in place, or in a new tab with Cmd/Ctrl or the middle
+     button, and focus goes to the note. */
+  openHeadingTarget(evt) {
+    const file = this.headingTarget();
+    if (!file) return;
+    const workspace = this.app.workspace;
+    workspace.getLeaf(Keymap.isModEvent(evt)).openFile(file);
+    workspace.setActiveLeaf(workspace.getMostRecentLeaf(), { focus: true });
   }
 
   headingFor(view) {
@@ -239,14 +285,23 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     if (!heading) {
       heading = createDiv({ cls: HEADING_CLASS, text: this.settings.heading });
       /* It sits inside a note's row, and that row answers clicks, drags and
-         right-clicks for the note. The heading is chrome, so it swallows
-         them. */
+         right-clicks for the note, so every one of those stops here. A click
+         (or a middle click, or Enter) opens the heading's own note. */
       for (const type of ["click", "auxclick", "contextmenu", "mousedown"]) {
         heading.addEventListener(type, (evt) => {
           evt.preventDefault();
           evt.stopPropagation();
+          if ((type === "click" && evt.button === 0) || (type === "auxclick" && evt.button === 1)) {
+            this.openHeadingTarget(evt);
+          }
         });
       }
+      heading.addEventListener("keydown", (evt) => {
+        if (evt.key !== "Enter") return;
+        evt.preventDefault();
+        evt.stopPropagation();
+        this.openHeadingTarget(evt);
+      });
       this.headings.set(view, heading);
     }
     return heading;
@@ -286,6 +341,20 @@ class FolderDrawerSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.heading = value.trim() || DEFAULT_SETTINGS.heading;
             await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Heading link")
+      .setDesc("The note the heading opens: a file name (found anywhere in the vault) or a vault path. Leave empty for a plain heading.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.headingLink)
+          .setValue(this.plugin.settings.headingLink)
+          .onChange(async (value) => {
+            this.plugin.settings.headingLink = value.trim();
+            await this.plugin.saveData(this.plugin.settings);
+            this.plugin.syncHeadings();
           })
       );
   }

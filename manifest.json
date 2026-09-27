@@ -1,7 +1,7 @@
 {
   "id": "folder-drawer",
   "name": "Folder Drawer",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "minAppVersion": "1.7.2",
   "description": "The File Explorer shows the notes at the vault root, then every note tagged #project/in-progress under a small Projects heading. Folders leave the explorer.",
   "author": "Jimmy Zhang",

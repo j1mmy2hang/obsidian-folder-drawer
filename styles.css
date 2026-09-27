@@ -62,3 +62,43 @@ body.is-mobile .nav-files-container {
 body.is-mobile .folder-drawer-heading {
   font-size: 12px;
 }
+
+/* --- The heading as a link --------------------------------------------
+   With a note set under Heading link, the heading opens it. Its box is
+   already a row's box (same height, same width), so it takes a row's
+   hover and a row's active state, and the label brightens from faint to
+   muted the way the 1.x FOLDERS header did.
+
+   Hover is fenced behind a hover-capable pointer: a tap on a touchscreen
+   latches :hover, and the heading would stay lit after every tap. A finger
+   gets :active instead, for exactly as long as the press lasts. */
+
+.folder-drawer-heading.is-clickable {
+  cursor: var(--cursor-link, pointer);
+  border-radius: var(--radius-s);
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (hover: hover) {
+  .folder-drawer-heading.is-clickable:hover {
+    background-color: var(--nav-item-background-hover);
+    color: var(--text-muted);
+  }
+}
+
+@media (hover: none) {
+  .folder-drawer-heading.is-clickable:active {
+    background-color: var(--nav-item-background-hover);
+  }
+}
+
+.folder-drawer-heading.is-active {
+  background-color: var(--nav-item-background-active);
+  color: var(--text-muted);
+}
+
+.folder-drawer-heading:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
