@@ -3,7 +3,7 @@
 An Obsidian plugin that turns the File Explorer into two short lists:
 
 - **the notes at the vault root**, the things still being worked out;
-- a small **PROJECTS** heading, then every note tagged `#project/in-progress`,
+- a small **PROJECTS** heading, then every note marked `project/in-progress`,
   wherever it lives in the vault.
 
 Folders leave the explorer. Nothing is hidden from Obsidian itself: every
@@ -34,13 +34,16 @@ from the latest release into `<vault>/.obsidian/plugins/folder-drawer/`.
 
 ## Use
 
-Tag a note `#project/in-progress` (in the frontmatter or the body) and it moves
-under **Projects**; take the tag off and it goes back. Nested tags count, so
-`#project/in-progress/film` does too.
+Put `project/in-progress` in a note's `descriptive` frontmatter list and it
+moves under **Projects**; take it out and it goes back. Nested values count, so
+`project/in-progress/film` does too. Empty the **Project property** setting to
+use real tags (`#project/in-progress`, frontmatter or body) instead.
 
 Settings → Folder Drawer:
 
-- **Project tag**: which tag lists a note under the heading.
+- **Project tag**: which value lists a note under the heading.
+- **Project property**: the frontmatter list to read it from (default
+  `descriptive`). Empty means the note's tags.
 - **Heading**: the heading's text.
 - **Heading link**: a note the heading opens when clicked, e.g. an index of
   all your projects. A file name (found anywhere in the vault) or a vault path.

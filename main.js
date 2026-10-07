@@ -47,6 +47,9 @@ const SEAM_CLASS = "folder-drawer-seam";
 
 const DEFAULT_SETTINGS = {
   projectTag: "project/in-progress",
+  /* The frontmatter list that holds projectTag. Empty reads the note's real
+     tags instead, so project status can live outside the tags. */
+  projectProperty: "descriptive",
   heading: "Projects",
   /* The note the heading opens. The author's own, found by file name, so a
      fresh install on another device works with nothing to type. Empty makes
@@ -129,11 +132,15 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     const want = normalize(this.settings.projectTag);
     const found = new Set();
     if (!want) return found;
+    const key = this.settings.projectProperty.trim();
     const cache = this.app.metadataCache;
     for (const file of this.app.vault.getMarkdownFiles()) {
       const meta = cache.getFileCache(file);
-      const tags = (meta && getAllTags(meta)) || [];
-      if (tags.some((t) => ((t = normalize(t)), t === want || t.startsWith(want + "/")))) found.add(file);
+      if (!meta) continue;
+      const values = key ? [].concat(meta.frontmatter?.[key] ?? []) : getAllTags(meta) || [];
+      if (values.some((v) => typeof v === "string" && ((v = normalize(v)), v === want || v.startsWith(want + "/")))) {
+        found.add(file);
+      }
     }
     this.projects = found;
     return found;
@@ -320,13 +327,26 @@ class FolderDrawerSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Project tag")
-      .setDesc("Notes carrying this tag, or a tag nested under it, are listed under the heading. With or without the #.")
+      .setDesc("Notes carrying this value, or one nested under it, are listed under the heading. With or without the #.")
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_SETTINGS.projectTag)
           .setValue(this.plugin.settings.projectTag)
           .onChange(async (value) => {
             this.plugin.settings.projectTag = normalize(value) || DEFAULT_SETTINGS.projectTag;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Project property")
+      .setDesc("The frontmatter list to look in for the project tag. Leave empty to use the note's tags.")
+      .addText((text) =>
+        text
+          .setPlaceholder("tags")
+          .setValue(this.plugin.settings.projectProperty)
+          .onChange(async (value) => {
+            this.plugin.settings.projectProperty = value.trim();
             await this.plugin.saveSettings();
           })
       );
