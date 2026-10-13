@@ -1,6 +1,6 @@
 /* --- Folder Drawer ---------------------------------------------------------
 
-   The heading is not a row. The first project note's row opens a band above
+   A heading is not a row. The first row of each section opens a band above
    itself with padding-top, and the heading is positioned absolutely into
    it, so it adds no height the virtualiser does not already measure. main.js
    explains why.
@@ -32,6 +32,14 @@ body.is-mobile .nav-files-container {
   position: relative;
   box-sizing: content-box;
   padding-top: var(--folder-drawer-band);
+}
+
+/* The first heading in the list has no section above it to keep apart from,
+   so its band is only the label and the 5px gap that every band leaves
+   between its label and the row below. */
+.folder-drawer-seam-top {
+  --folder-drawer-band: calc(var(--folder-drawer-row) + 5px);
+  --folder-drawer-band-center: calc(var(--folder-drawer-row) / 2);
 }
 
 /* top + height, never bottom: an absolute box is placed against the whole

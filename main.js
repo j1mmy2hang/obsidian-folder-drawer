@@ -3,26 +3,28 @@
 /*
  * Folder Drawer
  *
- * Turns the core File Explorer into two lists:
+ * Turns the core File Explorer into three lists:
  *
- *   the notes at the vault root   — what just arrived and is not sorted yet
- *   PROJECTS                      — every note tagged #project/in-progress,
- *                                   wherever it lives in the vault
+ *   MIND      — the notes at the vault root: what just arrived, not sorted yet
+ *   INBOX     — root notes that came from outside (clippings, the daily vocab,
+ *               the weekly letter), by a value in their `descriptive` list
+ *   PROJECTS  — every note tagged #project/in-progress, wherever it lives in
+ *               the vault
  *
  * Folders leave the explorer entirely; reach them through search, the Quick
  * Switcher, or any other pane. A root note that is also an active project
- * appears once, under Projects.
+ * appears once, under Projects. A section with no notes shows no heading.
  *
  * Until 2.0 this plugin folded the folders behind a FOLDERS header instead.
- * The header mechanism below is the same one, carrying a different label.
+ * The header mechanism below is the same one, once per section.
  *
  * How the list is changed
  * -----------------------
  * The explorer is virtualised and builds rows from its own sorted model, so
  * the change is made where the model is made: getSortedFolderItems, wrapped
  * (not replaced — other plugins may wrap it too, and the explorer's sort order still
- * orders both sections). For the root it returns the loose notes, then the
- * project notes, which are real explorer items borrowed from their folders.
+ * orders every section). For the root it returns the mind notes, the inbox
+ * notes, then the project notes, which are real explorer items borrowed from their folders.
  * Each folder's own list drops its project notes, so no item is claimed by two
  * parents: a tree item belongs to whichever list last called setChildren on it.
  * Indentation is measured from where a row actually sits, so a borrowed row
@@ -32,8 +34,8 @@
  * ----------------------------
  * The virtualiser deletes any child of the list it did not put there, and it
  * measures each row as the distance from its top to the next row's top.
- * Both were learned the hard way in 1.x. So the heading rides inside the
- * first project row: that row opens a band above itself with padding-top and
+ * Both were learned the hard way in 1.x. So each heading rides inside the
+ * first row of its section: that row opens a band above itself with padding-top and
  * the heading is positioned absolutely into it, adding no height of its own.
  * Obsidian never rewrites a row's own children, and the band is part of a
  * row it measures, so nothing moves that Obsidian does not know about.
@@ -44,6 +46,8 @@ const { Plugin, PluginSettingTab, Setting, TFile, Keymap, getAllTags, debounce }
 const ACTIVE_CLASS = "folder-drawer-active";
 const HEADING_CLASS = "folder-drawer-heading";
 const SEAM_CLASS = "folder-drawer-seam";
+/* The seam of the first section in the list: nothing above it to keep apart. */
+const TOP_SEAM_CLASS = "folder-drawer-seam-top";
 
 const DEFAULT_SETTINGS = {
   projectTag: "project/in-progress",
@@ -55,6 +59,11 @@ const DEFAULT_SETTINGS = {
      fresh install on another device works with nothing to type. Empty makes
      the heading a plain label again. */
   headingLink: "projects.md.md",
+  /* Root notes whose property (projectProperty, or the tags) holds one of
+     these go under the inbox heading instead of the mind heading. */
+  inboxValues: ["clipping", "daily-vocab", "weekly-letter"],
+  inboxHeading: "Inbox",
+  mindHeading: "Mind",
 };
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -82,6 +91,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.headings = new WeakMap();
     this.projects = new Set();
+    this.inbox = new Set();
 
     document.body.classList.add(ACTIVE_CLASS);
     this.addSettingTab(new FolderDrawerSettingTab(this.app, this));
@@ -114,7 +124,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   onunload() {
     document.body.classList.remove(ACTIVE_CLASS);
     document.querySelectorAll("." + HEADING_CLASS).forEach((el) => el.remove());
-    document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS));
+    document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS));
     this.restore();
     this.resort();
   }
@@ -128,29 +138,32 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   /* --- which notes are projects ---------------------------------------- */
 
+  /* Projects anywhere in the vault; inbox notes at the root only. */
   scan() {
     const want = normalize(this.settings.projectTag);
-    const found = new Set();
-    if (!want) return found;
+    const inboxWant = new Set(this.settings.inboxValues.map(normalize).filter(Boolean));
+    const projects = new Set();
+    const inbox = new Set();
     const key = this.settings.projectProperty.trim();
     const cache = this.app.metadataCache;
     for (const file of this.app.vault.getMarkdownFiles()) {
       const meta = cache.getFileCache(file);
       if (!meta) continue;
-      const values = key ? [].concat(meta.frontmatter?.[key] ?? []) : getAllTags(meta) || [];
-      if (values.some((v) => typeof v === "string" && ((v = normalize(v)), v === want || v.startsWith(want + "/")))) {
-        found.add(file);
-      }
+      const values = (key ? [].concat(meta.frontmatter?.[key] ?? []) : getAllTags(meta) || [])
+        .filter((v) => typeof v === "string")
+        .map(normalize);
+      if (want && values.some((v) => v === want || v.startsWith(want + "/"))) projects.add(file);
+      else if (file.parent?.isRoot() && values.some((v) => inboxWant.has(v))) inbox.add(file);
     }
-    this.projects = found;
-    return found;
+    this.projects = projects;
+    this.inbox = inbox;
   }
 
   rescan(force = false) {
-    const before = this.projects;
-    const after = this.scan();
-    const same = before.size === after.size && [...after].every((f) => before.has(f));
-    if (force || !same) this.resort();
+    const same = (a, b) => a.size === b.size && [...b].every((f) => a.has(f));
+    const before = [this.projects, this.inbox];
+    this.scan();
+    if (force || !same(before[0], this.projects) || !same(before[1], this.inbox)) this.resort();
   }
 
   /* --- the explorer ------------------------------------------------------ */
@@ -192,13 +205,15 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       /* If another plugin wrapped this wrapper, unloading cannot unhook it;
          the guard makes it inert instead. */
       if (!plugin._loaded) return items;
-      const projects = plugin.projects;
+      const { projects, inbox } = plugin;
 
       if (!folder || !folder.isRoot()) {
         return items.filter((item) => !(item && projects.has(item.file)));
       }
 
       const loose = items.filter((item) => item && item.file instanceof TFile && !projects.has(item.file));
+      const mind = loose.filter((item) => !inbox.has(item.file));
+      const inboxItems = loose.filter((item) => inbox.has(item.file));
       const compare = COMPARE[this.sortOrder] || COMPARE.alphabetical;
       const borrowed = [...projects]
         .sort(compare)
@@ -206,8 +221,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
         .filter(Boolean);
       /* Skip rows a file-hider has switched off: they take no space, so a
          heading parked in one would have no band to sit in. */
-      plugin.placeHeading(this, borrowed.find((item) => item.el && item.el.style.display !== "none"));
-      return loose.concat(borrowed);
+      const first = (list) => list.find((item) => item.el && item.el.style.display !== "none");
+      plugin.placeHeadings(this, { mind: first(mind), inbox: first(inboxItems), projects: first(borrowed) });
+      return mind.concat(inboxItems, borrowed);
     };
 
     proto.getSortedFolderItems = this.wrapper;
@@ -234,26 +250,34 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     }
   }
 
-  /* --- the heading --------------------------------------------------------- */
+  /* --- the headings -------------------------------------------------------- */
 
-  placeHeading(view, first) {
-    const heading = this.headingFor(view);
+  /* firsts maps each section to the row its heading rides in, or nothing
+     when the section is empty. */
+  placeHeadings(view, firsts) {
+    const rows = Object.values(firsts).filter(Boolean).map((item) => item.el);
+    const seams = new Set(rows);
     view.containerEl.querySelectorAll("." + SEAM_CLASS).forEach((el) => {
-      if (!first || el !== first.el) el.classList.remove(SEAM_CLASS);
+      if (!seams.has(el)) el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS);
     });
-    if (!first) {
-      heading.remove();
-      return;
+    rows.forEach((el, i) => el.classList.toggle(TOP_SEAM_CLASS, i === 0));
+    for (const [section, first] of Object.entries(firsts)) {
+      const heading = this.headingFor(view, section);
+      if (!first) {
+        heading.remove();
+        continue;
+      }
+      first.el.classList.add(SEAM_CLASS);
+      if (first.el.firstChild !== heading) first.el.insertBefore(heading, first.el.firstChild);
+      this.syncHeading(heading);
     }
-    first.el.classList.add(SEAM_CLASS);
-    if (first.el.firstChild !== heading) first.el.insertBefore(heading, first.el.firstChild);
-    this.syncHeading(heading);
   }
 
   /* The heading's note: a vault path, or a file name found anywhere in the
      vault. Looked up on every use, so renaming or moving it never strands
      the heading. */
-  headingTarget() {
+  headingTarget(section = "projects") {
+    if (section !== "projects") return null;
     const want = (this.settings.headingLink || "").trim().replace(/^\/+/, "");
     if (!want) return null;
     const vault = this.app.vault;
@@ -265,7 +289,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   }
 
   syncHeading(heading) {
-    const target = this.headingTarget();
+    const target = this.headingTarget(heading.dataset.section);
     const active = this.app.workspace.getActiveFile();
     heading.toggleClass("is-clickable", !!target);
     heading.toggleClass("is-active", !!target && active === target);
@@ -279,18 +303,23 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   /* Opens like a row: in place, or in a new tab with Cmd/Ctrl or the middle
      button, and focus goes to the note. */
-  openHeadingTarget(evt) {
-    const file = this.headingTarget();
+  openHeadingTarget(evt, section) {
+    const file = this.headingTarget(section);
     if (!file) return;
     const workspace = this.app.workspace;
     workspace.getLeaf(Keymap.isModEvent(evt)).openFile(file);
     workspace.setActiveLeaf(workspace.getMostRecentLeaf(), { focus: true });
   }
 
-  headingFor(view) {
-    let heading = this.headings.get(view);
+  /* Only the projects heading links to a note; the others are labels. */
+  headingFor(view, section) {
+    let headings = this.headings.get(view);
+    if (!headings) this.headings.set(view, (headings = new Map()));
+    let heading = headings.get(section);
     if (!heading) {
-      heading = createDiv({ cls: HEADING_CLASS, text: this.settings.heading });
+      const text = { mind: this.settings.mindHeading, inbox: this.settings.inboxHeading, projects: this.settings.heading }[section];
+      heading = createDiv({ cls: HEADING_CLASS, text });
+      heading.dataset.section = section;
       /* It sits inside a note's row, and that row answers clicks, drags and
          right-clicks for the note, so every one of those stops here. A click
          (or a middle click, or Enter) opens the heading's own note. */
@@ -299,7 +328,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
           evt.preventDefault();
           evt.stopPropagation();
           if ((type === "click" && evt.button === 0) || (type === "auxclick" && evt.button === 1)) {
-            this.openHeadingTarget(evt);
+            this.openHeadingTarget(evt, section);
           }
         });
       }
@@ -307,9 +336,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
         if (evt.key !== "Enter") return;
         evt.preventDefault();
         evt.stopPropagation();
-        this.openHeadingTarget(evt);
+        this.openHeadingTarget(evt, section);
       });
-      this.headings.set(view, heading);
+      headings.set(section, heading);
     }
     return heading;
   }
@@ -352,8 +381,8 @@ class FolderDrawerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Heading")
-      .setDesc("The small heading between the root notes and the projects.")
+      .setName("Projects heading")
+      .setDesc("The heading above the projects.")
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_SETTINGS.heading)
@@ -363,6 +392,37 @@ class FolderDrawerSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    new Setting(containerEl)
+      .setName("Inbox values")
+      .setDesc("Root notes whose project property (or tags) holds one of these, separated by commas, are listed under the inbox heading.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.inboxValues.join(", "))
+          .setValue(this.plugin.settings.inboxValues.join(", "))
+          .onChange(async (value) => {
+            this.plugin.settings.inboxValues = value.split(",").map(normalize).filter(Boolean);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    for (const [key, name, desc] of [
+      ["mindHeading", "Mind heading", "The heading above the root notes."],
+      ["inboxHeading", "Inbox heading", "The heading above the inbox notes."],
+    ]) {
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(desc)
+        .addText((text) =>
+          text
+            .setPlaceholder(DEFAULT_SETTINGS[key])
+            .setValue(this.plugin.settings[key])
+            .onChange(async (value) => {
+              this.plugin.settings[key] = value.trim() || DEFAULT_SETTINGS[key];
+              await this.plugin.saveSettings();
+            })
+        );
+    }
 
     new Setting(containerEl)
       .setName("Heading link")
