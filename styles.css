@@ -181,9 +181,11 @@ body.is-mobile .folder-drawer-heading {
   }
 }
 
-/* No hover on a touchscreen: the chevron is always there. */
+/* No hover on a touchscreen, so an open section's chevron stays hidden but
+   still takes a tap at the heading's right edge (opacity 0 keeps its hit
+   area). That is the only way to fold Projects, whose label is a link. */
 @media (hover: none) {
-  .folder-drawer-heading-chevron {
+  .folder-drawer-heading-chevron:active {
     opacity: 1;
   }
 }
