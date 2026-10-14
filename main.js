@@ -41,13 +41,19 @@
  * row it measures, so nothing moves that Obsidian does not know about.
  */
 
-const { Plugin, PluginSettingTab, Setting, TFile, Keymap, getAllTags, debounce } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, TFile, Keymap, getAllTags, debounce, setIcon } = require("obsidian");
 
 const ACTIVE_CLASS = "folder-drawer-active";
 const HEADING_CLASS = "folder-drawer-heading";
 const SEAM_CLASS = "folder-drawer-seam";
 /* The seam of the first section in the list: nothing above it to keep apart. */
 const TOP_SEAM_CLASS = "folder-drawer-seam-top";
+/* The seam of a folded section: the row keeps its band, its own content hides. */
+const FOLDED_CLASS = "folder-drawer-folded";
+/* A row, or a seam row's own content, while a fold animates it. */
+const FOLDING_CLASS = "folder-drawer-folding";
+const FOLD_MS = 260;
+const FOLD_EASING = "cubic-bezier(0.2, 0, 0, 1)";
 
 const DEFAULT_SETTINGS = {
   projectTag: "project/in-progress",
@@ -64,6 +70,8 @@ const DEFAULT_SETTINGS = {
   inboxValues: ["clipping", "daily-vocab", "weekly-letter"],
   inboxHeading: "Inbox",
   mindHeading: "Mind",
+  /* Sections folded under their heading. */
+  collapsed: [],
 };
 
 const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
@@ -90,6 +98,8 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     delete saved.open;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
     this.headings = new WeakMap();
+    /* view → each section's full list of items, before any folding. */
+    this.sections = new WeakMap();
     this.projects = new Set();
     this.inbox = new Set();
 
@@ -123,8 +133,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   onunload() {
     document.body.classList.remove(ACTIVE_CLASS);
+    this.clearFold();
     document.querySelectorAll("." + HEADING_CLASS).forEach((el) => el.remove());
-    document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS));
+    document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS, FOLDED_CLASS));
     this.restore();
     this.resort();
   }
@@ -134,6 +145,125 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.headings = new WeakMap();
     document.querySelectorAll("." + HEADING_CLASS).forEach((el) => el.remove());
     this.rescan(true);
+  }
+
+  isCollapsed(section) {
+    return this.settings.collapsed.includes(section);
+  }
+
+  /* A fold moves only transform and opacity, which the compositor runs
+     without layout. The layout changes once, at an instant when the motion
+     hides it. Closing: the section's rows fade while the rows below slide up
+     over them, and when the slide lands the sort drops the faded rows, so
+     everything below is already where the new layout puts it. Opening: the
+     sort lays the section out first, hidden, before the browser paints; the
+     rows below start where they were and slide down, and the section fades
+     in behind them. The virtualiser's cached heights are dropped at the end. */
+  async toggleSection(section) {
+    if (this.folding) return;
+    this.folding = true;
+    const closing = !this.isCollapsed(section);
+    const motion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    try {
+      if (closing && motion) await this.fold(section, false);
+      this.settings.collapsed = closing
+        ? this.settings.collapsed.concat(section)
+        : this.settings.collapsed.filter((s) => s !== section);
+      this.saveData(this.settings);
+      if (!closing && motion) {
+        this.stage(section);
+        this.sortNow();
+        await this.fold(section, true);
+      } else {
+        this.sortNow();
+      }
+    } finally {
+      this.clearFold();
+      /* Heights only. A queued sort would land in the next fold and detach
+         its rows, and a detached row drops its animation. */
+      for (const view of this.explorerViews()) view.tree?.infinityScroll?.invalidateAll?.();
+      this.folding = false;
+    }
+  }
+
+  sortNow() {
+    for (const view of this.explorerViews()) if (typeof view.sort === "function") view.sort();
+  }
+
+  /* What fades in a section: every row but the seam, and the seam row's own
+     content, never the seam row itself, which carries the heading. */
+  foldTargets(view, section) {
+    const targets = [];
+    for (const item of this.sections.get(view)?.[section] || []) {
+      const el = item.el;
+      if (!el || !el.isConnected || el.style.display === "none") continue;
+      if (el.classList.contains(SEAM_CLASS)) {
+        const self = el.querySelector(":scope > .tree-item-self");
+        if (self) targets.push(self);
+      } else {
+        targets.push(el);
+      }
+    }
+    return targets;
+  }
+
+  /* Opening: the section is laid out invisible, so the sort shows nothing. */
+  stage(section) {
+    for (const view of this.explorerViews()) {
+      for (const item of this.sections.get(view)?.[section] || []) {
+        const el = item.el;
+        if (!el) continue;
+        const target = el.classList.contains(SEAM_CLASS) ? el.querySelector(":scope > .tree-item-self") : el;
+        target?.classList.add(FOLDING_CLASS, "is-staged");
+      }
+    }
+  }
+
+  async fold(section, opening) {
+    const animations = [];
+    const run = (el, frames, options) => {
+      el.classList.add(FOLDING_CLASS);
+      animations.push(el.animate(frames, { duration: FOLD_MS, fill: "both", ...options }));
+    };
+    for (const view of this.explorerViews()) {
+      const targets = this.foldTargets(view, section);
+      if (!targets.length) continue;
+      /* The rows below: every attached row after the section's last one. */
+      const last = targets[targets.length - 1].closest(".tree-item") || targets[targets.length - 1];
+      const followers = [];
+      for (let el = last.nextElementSibling; el; el = el.nextElementSibling) {
+        if (el.classList.contains("tree-item")) followers.push(el);
+      }
+      /* How far they move: from where they sit now to just under the
+         heading, which is where the section's own content begins. */
+      const shift = followers.length ? followers[0].getBoundingClientRect().top - targets[0].getBoundingClientRect().top : 0;
+      const away = `translateY(${-shift}px)`;
+      for (const el of followers) {
+        run(el, opening ? [{ transform: away }, { transform: "none" }] : [{ transform: "none" }, { transform: away }], {
+          easing: FOLD_EASING,
+        });
+      }
+      /* The section is gone by the time the rows below cover most of it,
+         and comes back only as they uncover it. */
+      for (const el of targets) {
+        el.classList.remove("is-staged");
+        run(
+          el,
+          opening
+            ? [{ opacity: 0 }, { opacity: 0, offset: 0.25 }, { opacity: 1 }]
+            : [{ opacity: 1 }, { opacity: 0, offset: 0.6 }, { opacity: 0 }],
+          { easing: "linear" }
+        );
+      }
+    }
+    this.foldAnimations = (this.foldAnimations || []).concat(animations);
+    await Promise.all(animations.map((a) => a.finished.catch(() => {})));
+  }
+
+  clearFold() {
+    for (const a of this.foldAnimations || []) a.cancel();
+    this.foldAnimations = [];
+    document.querySelectorAll("." + FOLDING_CLASS).forEach((el) => el.classList.remove(FOLDING_CLASS, "is-staged"));
   }
 
   /* --- which notes are projects ---------------------------------------- */
@@ -222,8 +352,14 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       /* Skip rows a file-hider has switched off: they take no space, so a
          heading parked in one would have no band to sit in. */
       const first = (list) => list.find((item) => item.el && item.el.style.display !== "none");
-      plugin.placeHeadings(this, { mind: first(mind), inbox: first(inboxItems), projects: first(borrowed) });
-      return mind.concat(inboxItems, borrowed);
+      const firsts = { mind: first(mind), inbox: first(inboxItems), projects: first(borrowed) };
+      plugin.sections.set(this, { mind, inbox: inboxItems, projects: borrowed });
+      plugin.placeHeadings(this, firsts);
+      /* A folded section keeps only the row its heading rides in, so the
+         virtualiser never builds or measures the rest. */
+      const shown = (section, list) =>
+        plugin.isCollapsed(section) ? (firsts[section] ? [firsts[section]] : []) : list;
+      return shown("mind", mind).concat(shown("inbox", inboxItems), shown("projects", borrowed));
     };
 
     proto.getSortedFolderItems = this.wrapper;
@@ -258,7 +394,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     const rows = Object.values(firsts).filter(Boolean).map((item) => item.el);
     const seams = new Set(rows);
     view.containerEl.querySelectorAll("." + SEAM_CLASS).forEach((el) => {
-      if (!seams.has(el)) el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS);
+      if (!seams.has(el)) el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS, FOLDED_CLASS);
     });
     rows.forEach((el, i) => el.classList.toggle(TOP_SEAM_CLASS, i === 0));
     for (const [section, first] of Object.entries(firsts)) {
@@ -268,6 +404,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
         continue;
       }
       first.el.classList.add(SEAM_CLASS);
+      first.el.classList.toggle(FOLDED_CLASS, this.isCollapsed(section));
       if (first.el.firstChild !== heading) first.el.insertBefore(heading, first.el.firstChild);
       this.syncHeading(heading);
     }
@@ -288,13 +425,19 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     return this.app.metadataCache.getFirstLinkpathDest(want, "");
   }
 
+  /* Every heading is clickable now: a linked one opens its note, the rest
+     fold their section. */
   syncHeading(heading) {
-    const target = this.headingTarget(heading.dataset.section);
+    const section = heading.dataset.section;
+    const target = this.headingTarget(section);
     const active = this.app.workspace.getActiveFile();
-    heading.toggleClass("is-clickable", !!target);
+    const collapsed = this.isCollapsed(section);
+    heading.toggleClass("is-clickable", true);
     heading.toggleClass("is-active", !!target && active === target);
-    heading.setAttr("tabindex", target ? "0" : "-1");
-    heading.setAttr("role", target ? "link" : null);
+    heading.toggleClass("is-collapsed", collapsed);
+    heading.setAttr("tabindex", "0");
+    heading.setAttr("role", target ? "link" : "button");
+    heading.setAttr("aria-expanded", target ? null : String(!collapsed));
   }
 
   syncHeadings() {
@@ -318,8 +461,18 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     let heading = headings.get(section);
     if (!heading) {
       const text = { mind: this.settings.mindHeading, inbox: this.settings.inboxHeading, projects: this.settings.heading }[section];
-      heading = createDiv({ cls: HEADING_CLASS, text });
+      heading = createDiv({ cls: HEADING_CLASS });
       heading.dataset.section = section;
+      heading.createSpan({ cls: HEADING_CLASS + "-label", text });
+      const chevron = heading.createDiv({ cls: HEADING_CLASS + "-chevron" });
+      chevron.setAttr("aria-label", "Fold section");
+      setIcon(chevron, "chevron-down");
+      /* The chevron folds any section; a label without a note to open folds too. */
+      const activate = (evt) => {
+        if (evt.target instanceof Node && chevron.contains(evt.target)) this.toggleSection(section);
+        else if (this.headingTarget(section)) this.openHeadingTarget(evt, section);
+        else this.toggleSection(section);
+      };
       /* It sits inside a note's row, and that row answers clicks, drags and
          right-clicks for the note, so every one of those stops here. A click
          (or a middle click, or Enter) opens the heading's own note. */
@@ -327,16 +480,17 @@ module.exports = class FolderDrawerPlugin extends Plugin {
         heading.addEventListener(type, (evt) => {
           evt.preventDefault();
           evt.stopPropagation();
-          if ((type === "click" && evt.button === 0) || (type === "auxclick" && evt.button === 1)) {
-            this.openHeadingTarget(evt, section);
-          }
+          if (type === "click" && evt.button === 0) activate(evt);
+          else if (type === "auxclick" && evt.button === 1) this.openHeadingTarget(evt, section);
         });
       }
       heading.addEventListener("keydown", (evt) => {
-        if (evt.key !== "Enter") return;
+        if (evt.key !== "Enter" && evt.key !== " ") return;
         evt.preventDefault();
         evt.stopPropagation();
-        this.openHeadingTarget(evt, section);
+        /* Enter acts like a click on the label; Space always folds. */
+        if (evt.key === "Enter") activate(evt);
+        else this.toggleSection(section);
       });
       headings.set(section, heading);
     }
