@@ -294,9 +294,9 @@ body.is-mobile .folder-drawer-heading {
    few pixels. Nothing in CSS sets that curve, so the motion is left alone
    and only how it is drawn changes: the scroller's position drives a
    transform on both spaces (a scroll-driven animation, run by the
-   compositor), drawing the last 8% of the way at a fifth of its speed and
-   the middle slightly faster. At rest the transform is zero. Generated from
-   a smooth curve (zone 0.08, end slope 0.2); delete this block to undo.
+   compositor), drawing the last 22% of the way at down to 4% of its speed
+   and the middle at 1.27x. At rest the transform is zero. Generated from a
+   smooth curve (zone 0.22, end slope 0.04); delete this block to undo.
    ---------------------------------------------------------------------- */
 
 .folder-drawer-spaces-wrap {
@@ -311,87 +311,134 @@ body.is-mobile .folder-drawer-heading {
 
 @keyframes folder-drawer-landing {
   0.00% { transform: translateX(-0.000%); }
-  0.50% { transform: translateX(0.392%); }
-  1.00% { transform: translateX(0.774%); }
-  1.50% { transform: translateX(1.139%); }
-  2.00% { transform: translateX(1.479%); }
-  2.50% { transform: translateX(1.790%); }
-  3.00% { transform: translateX(2.066%); }
-  3.50% { transform: translateX(2.305%); }
-  4.00% { transform: translateX(2.504%); }
-  4.50% { transform: translateX(2.664%); }
-  5.00% { transform: translateX(2.784%); }
-  5.50% { transform: translateX(2.867%); }
-  6.00% { transform: translateX(2.915%); }
-  6.50% { transform: translateX(2.934%); }
-  7.00% { transform: translateX(2.928%); }
-  7.50% { transform: translateX(2.904%); }
-  8.00% { transform: translateX(2.872%); }
-  8.50% { transform: translateX(2.838%); }
-  9.00% { transform: translateX(2.803%); }
-  9.50% { transform: translateX(2.769%); }
-  10.00% { transform: translateX(2.735%); }
-  12.00% { transform: translateX(2.598%); }
-  14.00% { transform: translateX(2.462%); }
-  16.00% { transform: translateX(2.325%); }
-  18.00% { transform: translateX(2.188%); }
-  20.00% { transform: translateX(2.051%); }
-  22.00% { transform: translateX(1.915%); }
-  24.00% { transform: translateX(1.778%); }
-  26.00% { transform: translateX(1.641%); }
-  28.00% { transform: translateX(1.504%); }
-  30.00% { transform: translateX(1.368%); }
-  32.00% { transform: translateX(1.231%); }
-  34.00% { transform: translateX(1.094%); }
-  36.00% { transform: translateX(0.957%); }
-  38.00% { transform: translateX(0.821%); }
-  40.00% { transform: translateX(0.684%); }
-  42.00% { transform: translateX(0.547%); }
-  44.00% { transform: translateX(0.410%); }
-  46.00% { transform: translateX(0.274%); }
-  48.00% { transform: translateX(0.137%); }
+  0.50% { transform: translateX(0.474%); }
+  1.00% { transform: translateX(0.947%); }
+  1.50% { transform: translateX(1.416%); }
+  2.00% { transform: translateX(1.879%); }
+  2.50% { transform: translateX(2.336%); }
+  3.00% { transform: translateX(2.785%); }
+  3.50% { transform: translateX(3.223%); }
+  4.00% { transform: translateX(3.651%); }
+  4.50% { transform: translateX(4.066%); }
+  5.00% { transform: translateX(4.468%); }
+  5.50% { transform: translateX(4.855%); }
+  6.00% { transform: translateX(5.227%); }
+  6.50% { transform: translateX(5.582%); }
+  7.00% { transform: translateX(5.920%); }
+  7.50% { transform: translateX(6.240%); }
+  8.00% { transform: translateX(6.541%); }
+  8.50% { transform: translateX(6.823%); }
+  9.00% { transform: translateX(7.085%); }
+  9.50% { transform: translateX(7.328%); }
+  10.00% { transform: translateX(7.550%); }
+  10.50% { transform: translateX(7.751%); }
+  11.00% { transform: translateX(7.932%); }
+  11.50% { transform: translateX(8.092%); }
+  12.00% { transform: translateX(8.231%); }
+  12.50% { transform: translateX(8.350%); }
+  13.00% { transform: translateX(8.449%); }
+  13.50% { transform: translateX(8.527%); }
+  14.00% { transform: translateX(8.586%); }
+  14.50% { transform: translateX(8.625%); }
+  15.00% { transform: translateX(8.646%); }
+  15.50% { transform: translateX(8.649%); }
+  16.00% { transform: translateX(8.634%); }
+  16.50% { transform: translateX(8.604%); }
+  17.00% { transform: translateX(8.557%); }
+  17.50% { transform: translateX(8.496%); }
+  18.00% { transform: translateX(8.422%); }
+  18.50% { transform: translateX(8.335%); }
+  19.00% { transform: translateX(8.237%); }
+  19.50% { transform: translateX(8.129%); }
+  20.00% { transform: translateX(8.013%); }
+  20.50% { transform: translateX(7.890%); }
+  21.00% { transform: translateX(7.762%); }
+  21.50% { transform: translateX(7.631%); }
+  22.00% { transform: translateX(7.497%); }
+  22.50% { transform: translateX(7.363%); }
+  23.00% { transform: translateX(7.229%); }
+  23.50% { transform: translateX(7.095%); }
+  24.00% { transform: translateX(6.961%); }
+  24.50% { transform: translateX(6.828%); }
+  25.00% { transform: translateX(6.694%); }
+  25.50% { transform: translateX(6.560%); }
+  26.00% { transform: translateX(6.426%); }
+  28.00% { transform: translateX(5.890%); }
+  30.00% { transform: translateX(5.355%); }
+  32.00% { transform: translateX(4.819%); }
+  34.00% { transform: translateX(4.284%); }
+  36.00% { transform: translateX(3.748%); }
+  38.00% { transform: translateX(3.213%); }
+  40.00% { transform: translateX(2.677%); }
+  42.00% { transform: translateX(2.142%); }
+  44.00% { transform: translateX(1.606%); }
+  46.00% { transform: translateX(1.071%); }
+  48.00% { transform: translateX(0.535%); }
   50.00% { transform: translateX(-0.000%); }
-  52.00% { transform: translateX(-0.137%); }
-  54.00% { transform: translateX(-0.274%); }
-  56.00% { transform: translateX(-0.410%); }
-  58.00% { transform: translateX(-0.547%); }
-  60.00% { transform: translateX(-0.684%); }
-  62.00% { transform: translateX(-0.821%); }
-  64.00% { transform: translateX(-0.957%); }
-  66.00% { transform: translateX(-1.094%); }
-  68.00% { transform: translateX(-1.231%); }
-  70.00% { transform: translateX(-1.368%); }
-  72.00% { transform: translateX(-1.504%); }
-  74.00% { transform: translateX(-1.641%); }
-  76.00% { transform: translateX(-1.778%); }
-  78.00% { transform: translateX(-1.915%); }
-  80.00% { transform: translateX(-2.051%); }
-  82.00% { transform: translateX(-2.188%); }
-  84.00% { transform: translateX(-2.325%); }
-  86.00% { transform: translateX(-2.462%); }
-  88.00% { transform: translateX(-2.598%); }
-  90.00% { transform: translateX(-2.735%); }
-  90.50% { transform: translateX(-2.769%); }
-  91.00% { transform: translateX(-2.803%); }
-  91.50% { transform: translateX(-2.838%); }
-  92.00% { transform: translateX(-2.872%); }
-  92.50% { transform: translateX(-2.904%); }
-  93.00% { transform: translateX(-2.928%); }
-  93.50% { transform: translateX(-2.934%); }
-  94.00% { transform: translateX(-2.915%); }
-  94.50% { transform: translateX(-2.867%); }
-  95.00% { transform: translateX(-2.784%); }
-  95.50% { transform: translateX(-2.664%); }
-  96.00% { transform: translateX(-2.504%); }
-  96.50% { transform: translateX(-2.305%); }
-  97.00% { transform: translateX(-2.066%); }
-  97.50% { transform: translateX(-1.790%); }
-  98.00% { transform: translateX(-1.479%); }
-  98.50% { transform: translateX(-1.139%); }
-  99.00% { transform: translateX(-0.774%); }
-  99.50% { transform: translateX(-0.392%); }
+  52.00% { transform: translateX(-0.535%); }
+  54.00% { transform: translateX(-1.071%); }
+  56.00% { transform: translateX(-1.606%); }
+  58.00% { transform: translateX(-2.142%); }
+  60.00% { transform: translateX(-2.677%); }
+  62.00% { transform: translateX(-3.213%); }
+  64.00% { transform: translateX(-3.748%); }
+  66.00% { transform: translateX(-4.284%); }
+  68.00% { transform: translateX(-4.819%); }
+  70.00% { transform: translateX(-5.355%); }
+  72.00% { transform: translateX(-5.890%); }
+  74.00% { transform: translateX(-6.426%); }
+  74.50% { transform: translateX(-6.560%); }
+  75.00% { transform: translateX(-6.694%); }
+  75.50% { transform: translateX(-6.828%); }
+  76.00% { transform: translateX(-6.961%); }
+  76.50% { transform: translateX(-7.095%); }
+  77.00% { transform: translateX(-7.229%); }
+  77.50% { transform: translateX(-7.363%); }
+  78.00% { transform: translateX(-7.497%); }
+  78.50% { transform: translateX(-7.631%); }
+  79.00% { transform: translateX(-7.762%); }
+  79.50% { transform: translateX(-7.890%); }
+  80.00% { transform: translateX(-8.013%); }
+  80.50% { transform: translateX(-8.129%); }
+  81.00% { transform: translateX(-8.237%); }
+  81.50% { transform: translateX(-8.335%); }
+  82.00% { transform: translateX(-8.422%); }
+  82.50% { transform: translateX(-8.496%); }
+  83.00% { transform: translateX(-8.557%); }
+  83.50% { transform: translateX(-8.604%); }
+  84.00% { transform: translateX(-8.634%); }
+  84.50% { transform: translateX(-8.649%); }
+  85.00% { transform: translateX(-8.646%); }
+  85.50% { transform: translateX(-8.625%); }
+  86.00% { transform: translateX(-8.586%); }
+  86.50% { transform: translateX(-8.527%); }
+  87.00% { transform: translateX(-8.449%); }
+  87.50% { transform: translateX(-8.350%); }
+  88.00% { transform: translateX(-8.231%); }
+  88.50% { transform: translateX(-8.092%); }
+  89.00% { transform: translateX(-7.932%); }
+  89.50% { transform: translateX(-7.751%); }
+  90.00% { transform: translateX(-7.550%); }
+  90.50% { transform: translateX(-7.328%); }
+  91.00% { transform: translateX(-7.085%); }
+  91.50% { transform: translateX(-6.823%); }
+  92.00% { transform: translateX(-6.541%); }
+  92.50% { transform: translateX(-6.240%); }
+  93.00% { transform: translateX(-5.920%); }
+  93.50% { transform: translateX(-5.582%); }
+  94.00% { transform: translateX(-5.227%); }
+  94.50% { transform: translateX(-4.855%); }
+  95.00% { transform: translateX(-4.468%); }
+  95.50% { transform: translateX(-4.066%); }
+  96.00% { transform: translateX(-3.651%); }
+  96.50% { transform: translateX(-3.223%); }
+  97.00% { transform: translateX(-2.785%); }
+  97.50% { transform: translateX(-2.336%); }
+  98.00% { transform: translateX(-1.879%); }
+  98.50% { transform: translateX(-1.416%); }
+  99.00% { transform: translateX(-0.947%); }
+  99.50% { transform: translateX(-0.474%); }
   100.00% { transform: translateX(-0.000%); }
-
 }
 
 /* The dots: one per space, the filled one showing. Each is a 20px target
