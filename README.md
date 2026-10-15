@@ -65,6 +65,15 @@ Settings → Folder Drawer:
   folders move. The note open in the active tab waits until you open another,
   so a new note keeps its selected title.
 
+- **Spaces** (on by default): the source folder and the **Later folder**
+  become two spaces side by side, as in Arc, Later to the right of Today.
+  Swipe sideways over the pane (two fingers on a trackpad, one on a
+  touchscreen) to slide from one to the other; the dots at the bottom of the
+  pane show which is showing and switch on click. Each space fills the same
+  headings from its own folder. Projects belong to Today; the root dock stays
+  put in both. **Next space** and **Previous space** are commands, for
+  hotkeys. Every launch opens on Today.
+
 The explorer's own sort order orders both lists.
 
 ## How it works
