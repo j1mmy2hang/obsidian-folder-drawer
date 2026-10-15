@@ -709,9 +709,15 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     const list = view.navFileContainerEl;
     if (!list || !list.parentElement) return;
 
+    /* The scroller holds a track two panes wide. The snap points are two
+       still markers on the track, not the lists themselves, so anything
+       drawn onto the lists cannot move where a swipe lands. */
     const wrap = createDiv({ cls: SPACES_WRAP_CLASS });
+    const track = wrap.createDiv({ cls: SPACES_WRAP_CLASS + "-track" });
+    track.createDiv({ cls: SPACES_WRAP_CLASS + "-stop" });
+    track.createDiv({ cls: SPACES_WRAP_CLASS + "-stop" });
     list.before(wrap);
-    wrap.appendChild(list);
+    track.appendChild(list);
     const later = new view.constructor(view.leaf);
     this.laterViews.add(later);
     later.sortOrder = view.sortOrder;
@@ -720,7 +726,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
        it. The pane stays whole, toolbar hidden: the explorer answers clicks,
        drags and right-clicks on its rows from the pane, not from the list. */
     later.containerEl.addClass(LATER_CLASS);
-    await later.open(wrap);
+    await later.open(track);
     if (this.stages.get(view)?.later !== later) return;
     later.requestSort();
     wrap.scrollLeft = this.space * wrap.clientWidth;
@@ -744,7 +750,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.laterViews.delete(later);
     later.unload();
     later.containerEl.remove();
-    if (view.navFileContainerEl.parentElement === wrap) wrap.replaceWith(view.navFileContainerEl);
+    if (wrap.contains(view.navFileContainerEl)) wrap.replaceWith(view.navFileContainerEl);
     else wrap.remove();
     this.spaceDots.get(view)?.remove();
     this.spaceDots.delete(view);

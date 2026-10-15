@@ -245,14 +245,38 @@ body.is-mobile .folder-drawer-heading {
   display: none;
 }
 
-/* Each space is one pane wide and scrolls up and down on its own: Today's
-   list, and Later's whole explorer pane with its toolbar hidden. */
-.folder-drawer-spaces-wrap > .nav-files-container,
-.folder-drawer-spaces-wrap > .folder-drawer-later {
-  flex: 0 0 100%;
+/* The track is two panes wide and clips what is drawn on it, so a list
+   drawn off its place never changes how far the scroller can go. */
+.folder-drawer-spaces-wrap-track {
+  position: relative;
+  flex: none;
+  width: 200%;
   min-width: 0;
+  display: flex;
+  overflow: clip;
+}
+
+/* The snap points: one still marker per space, half the track each. */
+.folder-drawer-spaces-wrap-stop {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 50%;
+  pointer-events: none;
   scroll-snap-align: start;
   scroll-snap-stop: always;
+}
+
+.folder-drawer-spaces-wrap-stop:nth-child(2) {
+  left: 50%;
+}
+
+/* Each space is one pane wide and scrolls up and down on its own: Today's
+   list, and Later's whole explorer pane with its toolbar hidden. */
+.folder-drawer-spaces-wrap-track > .nav-files-container,
+.folder-drawer-spaces-wrap-track > .folder-drawer-later {
+  flex: 0 0 50%;
+  min-width: 0;
 }
 
 .folder-drawer-later {
@@ -262,6 +286,112 @@ body.is-mobile .folder-drawer-heading {
 
 .folder-drawer-later > .nav-header {
   display: none;
+}
+
+/* --- Re-timing the landing (experiment) -----------------------------------
+
+   The browser lands a swipe with a fixed curve that crawls through its last
+   few pixels. Nothing in CSS sets that curve, so the motion is left alone
+   and only how it is drawn changes: the scroller's position drives a
+   transform on both spaces (a scroll-driven animation, run by the
+   compositor), drawing the last 8% of the way at a fifth of its speed and
+   the middle slightly faster. At rest the transform is zero. Generated from
+   a smooth curve (zone 0.08, end slope 0.2); delete this block to undo.
+   ---------------------------------------------------------------------- */
+
+.folder-drawer-spaces-wrap {
+  scroll-timeline: --folder-drawer-spaces x;
+}
+
+.folder-drawer-spaces-wrap-track > .nav-files-container,
+.folder-drawer-spaces-wrap-track > .folder-drawer-later {
+  animation: folder-drawer-landing linear both;
+  animation-timeline: --folder-drawer-spaces;
+}
+
+@keyframes folder-drawer-landing {
+  0.00% { transform: translateX(-0.000%); }
+  0.50% { transform: translateX(0.392%); }
+  1.00% { transform: translateX(0.774%); }
+  1.50% { transform: translateX(1.139%); }
+  2.00% { transform: translateX(1.479%); }
+  2.50% { transform: translateX(1.790%); }
+  3.00% { transform: translateX(2.066%); }
+  3.50% { transform: translateX(2.305%); }
+  4.00% { transform: translateX(2.504%); }
+  4.50% { transform: translateX(2.664%); }
+  5.00% { transform: translateX(2.784%); }
+  5.50% { transform: translateX(2.867%); }
+  6.00% { transform: translateX(2.915%); }
+  6.50% { transform: translateX(2.934%); }
+  7.00% { transform: translateX(2.928%); }
+  7.50% { transform: translateX(2.904%); }
+  8.00% { transform: translateX(2.872%); }
+  8.50% { transform: translateX(2.838%); }
+  9.00% { transform: translateX(2.803%); }
+  9.50% { transform: translateX(2.769%); }
+  10.00% { transform: translateX(2.735%); }
+  12.00% { transform: translateX(2.598%); }
+  14.00% { transform: translateX(2.462%); }
+  16.00% { transform: translateX(2.325%); }
+  18.00% { transform: translateX(2.188%); }
+  20.00% { transform: translateX(2.051%); }
+  22.00% { transform: translateX(1.915%); }
+  24.00% { transform: translateX(1.778%); }
+  26.00% { transform: translateX(1.641%); }
+  28.00% { transform: translateX(1.504%); }
+  30.00% { transform: translateX(1.368%); }
+  32.00% { transform: translateX(1.231%); }
+  34.00% { transform: translateX(1.094%); }
+  36.00% { transform: translateX(0.957%); }
+  38.00% { transform: translateX(0.821%); }
+  40.00% { transform: translateX(0.684%); }
+  42.00% { transform: translateX(0.547%); }
+  44.00% { transform: translateX(0.410%); }
+  46.00% { transform: translateX(0.274%); }
+  48.00% { transform: translateX(0.137%); }
+  50.00% { transform: translateX(-0.000%); }
+  52.00% { transform: translateX(-0.137%); }
+  54.00% { transform: translateX(-0.274%); }
+  56.00% { transform: translateX(-0.410%); }
+  58.00% { transform: translateX(-0.547%); }
+  60.00% { transform: translateX(-0.684%); }
+  62.00% { transform: translateX(-0.821%); }
+  64.00% { transform: translateX(-0.957%); }
+  66.00% { transform: translateX(-1.094%); }
+  68.00% { transform: translateX(-1.231%); }
+  70.00% { transform: translateX(-1.368%); }
+  72.00% { transform: translateX(-1.504%); }
+  74.00% { transform: translateX(-1.641%); }
+  76.00% { transform: translateX(-1.778%); }
+  78.00% { transform: translateX(-1.915%); }
+  80.00% { transform: translateX(-2.051%); }
+  82.00% { transform: translateX(-2.188%); }
+  84.00% { transform: translateX(-2.325%); }
+  86.00% { transform: translateX(-2.462%); }
+  88.00% { transform: translateX(-2.598%); }
+  90.00% { transform: translateX(-2.735%); }
+  90.50% { transform: translateX(-2.769%); }
+  91.00% { transform: translateX(-2.803%); }
+  91.50% { transform: translateX(-2.838%); }
+  92.00% { transform: translateX(-2.872%); }
+  92.50% { transform: translateX(-2.904%); }
+  93.00% { transform: translateX(-2.928%); }
+  93.50% { transform: translateX(-2.934%); }
+  94.00% { transform: translateX(-2.915%); }
+  94.50% { transform: translateX(-2.867%); }
+  95.00% { transform: translateX(-2.784%); }
+  95.50% { transform: translateX(-2.664%); }
+  96.00% { transform: translateX(-2.504%); }
+  96.50% { transform: translateX(-2.305%); }
+  97.00% { transform: translateX(-2.066%); }
+  97.50% { transform: translateX(-1.790%); }
+  98.00% { transform: translateX(-1.479%); }
+  98.50% { transform: translateX(-1.139%); }
+  99.00% { transform: translateX(-0.774%); }
+  99.50% { transform: translateX(-0.392%); }
+  100.00% { transform: translateX(-0.000%); }
+
 }
 
 /* The dots: one per space, the filled one showing. Each is a 20px target
