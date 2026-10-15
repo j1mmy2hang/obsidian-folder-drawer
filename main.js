@@ -77,18 +77,21 @@ const SPACES_CLASS = "folder-drawer-spaces";
 const FOLD_MS = 260;
 /* The still copy of the panel being swiped away. */
 const GHOST_CLASS = "folder-drawer-ghost";
-/* A whole pane's slide; a shorter one takes its share, never under 40%. */
-const SWITCH_MS = 320;
-/* How much of the pane a swipe must cover to land on the neighbour. */
-const SWIPE_COMMIT = 0.3;
-/* A finger lifted faster than this (px/ms) toward the neighbour lands too. */
-const SWIPE_FLICK = 0.5;
-/* How far the list gives at either end, where there is no space to go to. */
-const SWIPE_EDGE_PX = 36;
-/* A wheel swipe has ended once its events stop for this long; after a
-   switch, the momentum tail is swallowed until they stop for the longer one. */
-const SWIPE_END_MS = 120;
-const SWIPE_QUIET_MS = 260;
+/* Both panels while the strip is open. */
+const STRIP_CLASS = "folder-drawer-strip";
+/* The spring that lands the strip: how long it takes to settle, in
+   seconds, and 1 for no bounce, as a paging scroll view lands. */
+const SPRING_RESPONSE = 0.4;
+const SPRING_DAMPING = 1;
+/* How far ahead a lift's speed is projected to choose where to land: a
+   quick flick reaches the next space, a slow push lands on the nearer one. */
+const PROJECT_MS = 180;
+/* How hard the strip resists past either end, as iOS does. */
+const RUBBER = 0.55;
+/* No wheel event for this long: the fingers stopped or lifted. */
+const WHEEL_GAP_MS = 90;
+/* How long the strip stays open after landing, for a swipe straight back. */
+const STRIP_LINGER_MS = 900;
 /* How far a finger moves before the swipe is read as sideways or not. */
 const SWIPE_SLOP_PX = 10;
 const FOLD_EASING = "cubic-bezier(0.2, 0, 0, 1)";
@@ -156,10 +159,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     /* view → each section's full list of items, before any folding. */
     this.sections = new WeakMap();
     this.projects = new Set();
-    this.inbox = new Set();
-    this.todo = new Set();
-    this.loose = new Set();
     this.rootFiles = new Set();
+    /* Each space's todo, inbox and mind notes, filled in the same pass. */
+    this.bySpace = [];
     /* view → its dock element, and the dock's last-drawn contents. */
     this.docks = new WeakMap();
     /* The space showing: 0 is Today. Every launch starts there. */
@@ -237,8 +239,14 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     document.querySelectorAll("." + DOCK_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + SPACES_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS, FOLDED_CLASS));
+    if (this.strip) {
+      cancelAnimationFrame(this.strip.frame);
+      clearTimeout(this.strip.closer);
+      this.strip.el.style.transform = "";
+      this.strip.el.removeClass(STRIP_CLASS);
+      this.strip = null;
+    }
     document.querySelectorAll("." + GHOST_CLASS).forEach((el) => el.remove());
-    if (this.gesture) this.gesture.el.style.transform = "";
     this.space = this.listing = 0;
     this.restore();
     this.resort();
@@ -437,29 +445,46 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   /* --- which notes are projects ---------------------------------------- */
 
-  /* The folder the mind and inbox notes come from: the showing space's.
-     The root when the setting is empty or names no folder. */
+  /* The folder the mind and inbox notes come from: the listed space's. */
   sourceFolder() {
-    const later = this.spaces()[this.listing]?.later;
-    const path = (later ? this.settings.laterFolder : this.settings.sourceFolder).trim().replace(/^\/+|\/+$/g, "");
-    const folder = path && this.app.vault.getAbstractFileByPath(path);
-    return folder instanceof TFolder ? folder : this.app.vault.getRoot();
+    return this.spaceFolders()[this.listing] || this.spaceFolders()[0];
   }
 
-  /* Projects anywhere in the vault; inbox notes in the source folder only. */
+  /* Today's folder (the source folder, the root when unset) and, with
+     spaces on, Later's. */
+  spaceFolders() {
+    const today = this.folderAt(this.settings.sourceFolder) || this.app.vault.getRoot();
+    return this.spaces().length > 1 ? [today, this.folderAt(this.settings.laterFolder)] : [today];
+  }
+
+  /* The listed space's sections. Both spaces are filed in every scan, so
+     switching the list to the other one needs a sort and nothing more. */
+  get todo() {
+    return this.bySpace[this.listing]?.todo || new Set();
+  }
+  get inbox() {
+    return this.bySpace[this.listing]?.inbox || new Set();
+  }
+  get loose() {
+    return this.bySpace[this.listing]?.loose || new Set();
+  }
+
+  allSets() {
+    return [this.projects, this.rootFiles, ...this.bySpace.flatMap((s) => [s.todo, s.inbox, s.loose])];
+  }
+
+  /* Projects anywhere in the vault; inbox notes in a space's folder only. */
   scan() {
     this.projects = new Set();
-    this.inbox = new Set();
-    this.todo = new Set();
-    this.loose = new Set();
     this.rootFiles = new Set();
     const rules = this.rules();
+    this.bySpace = rules.sources.map(() => ({ todo: new Set(), inbox: new Set(), loose: new Set() }));
     for (const file of this.app.vault.getMarkdownFiles()) this.file(file, rules);
   }
 
   rules() {
     return {
-      source: this.sourceFolder(),
+      sources: this.spaceFolders(),
       want: normalize(this.settings.projectTag),
       inboxWant: new Set(this.settings.inboxValues.map(normalize).filter(Boolean)),
       todoWant: new Set(this.settings.todoValues.map(normalize).filter(Boolean)),
@@ -468,12 +493,13 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   }
 
   /* Adds one note to the lists it belongs in. */
-  file(file, { source, want, inboxWant, todoWant, key }) {
+  file(file, { sources, want, inboxWant, todoWant, key }) {
     /* A note on its way elsewhere shows up only once it arrives, not for a
        moment where it was. */
     const to = this.moving?.get(file);
     if (to && to !== file.path) return;
-    if (file.parent === source) this.loose.add(file);
+    const lists = this.bySpace[sources.indexOf(file.parent)];
+    if (lists) lists.loose.add(file);
     else if (file.parent?.isRoot()) this.rootFiles.add(file);
     const meta = this.app.metadataCache.getFileCache(file);
     if (!meta) return;
@@ -481,14 +507,14 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       .filter((v) => typeof v === "string")
       .map(normalize);
     if (want && values.some((v) => v === want || v.startsWith(want + "/"))) this.projects.add(file);
-    else if (file.parent === source && values.some((v) => todoWant.has(v))) this.todo.add(file);
-    else if (file.parent === source && values.some((v) => inboxWant.has(v))) this.inbox.add(file);
+    else if (lists && values.some((v) => todoWant.has(v))) lists.todo.add(file);
+    else if (lists && values.some((v) => inboxWant.has(v))) lists.inbox.add(file);
   }
 
   /* Re-files one note after it was created, changed, moved or deleted.
      Returns whether any list changed. */
   track(file) {
-    const sets = [this.projects, this.inbox, this.todo, this.loose, this.rootFiles];
+    const sets = this.allSets();
     const before = sets.map((set) => set.has(file));
     for (const set of sets) set.delete(file);
     if (file.extension === "md" && this.app.vault.getAbstractFileByPath(file.path) === file) this.file(file, this.rules());
@@ -497,11 +523,11 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   rescan(force = false) {
     const same = (a, b) => a.size === b.size && [...b].every((f) => a.has(f));
-    const before = [this.projects, this.inbox, this.todo, this.loose, this.rootFiles];
+    const before = this.allSets();
     this.scan();
     this.placeTodos();
-    const after = [this.projects, this.inbox, this.todo, this.loose, this.rootFiles];
-    if (force || before.some((set, i) => !same(set, after[i]))) this.resort();
+    const after = this.allSets();
+    if (force || before.length !== after.length || before.some((set, i) => !same(set, after[i]))) this.resort();
     this.renderDocks();
   }
 
@@ -574,6 +600,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       /* The next event tries again. */
     }
     this.patch();
+    for (const view of this.explorerViews()) this.attachSwipe(view);
   }
 
   explorerViews() {
@@ -690,23 +717,43 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   /* Lists the given space's notes, without saying it is the one showing. */
   list(space) {
     this.listing = space;
-    this.scan();
     this.sortNow();
     for (const view of this.explorerViews()) view.tree?.infinityScroll?.invalidateAll?.();
   }
 
-  /* The two spaces sit side by side, Later to the right of Today, and a
-     swipe moves them as one strip. The virtualiser holds one list, so the
-     panel being left is a still copy of it: the real list's rows, cloned
-     where they stand, scrolled where it was scrolled. The real list is then
-     sorted into the neighbour and parked a pane's width away. Whichever way
-     the swipe ends, the copy goes in the frame the real list covers its
-     place, and being a copy it looks exactly like what it replaced. */
-  prepare(gesture, target) {
-    if (gesture.target === target) return true;
-    this.unprepare(gesture, false);
-    if (target < 0 || target >= this.spaces().length || target === this.space) return false;
-    const { el } = gesture;
+  /* --- the strip -----------------------------------------------------------
+
+     The spaces are panels on one horizontal strip, Later to the right of
+     Today, and the strip has exactly one position, `pos`: the pixel offset
+     of the viewport along it, so Today shows at 0 and Later at one pane's
+     width. One thing moves it at a time. While fingers are on it, they do,
+     one to one. When they lift, a spring does, starting at the fingers'
+     speed and aiming where that speed was carrying the strip. Touching again
+     takes the strip from the spring wherever it is: nothing ever waits for
+     an animation to end. Past either end the strip rubber-bands.
+
+     The virtualiser holds one list, so the strip is two panels for as long
+     as it is open: a still copy of the space it started on (the real list's
+     rows, cloned where they stand) and the real list, sorted into the other
+     space and laid beside it. Opening costs one sort, at the first pixel of
+     movement. Once the strip rests on the real list, the copy waits a moment
+     off screen, so swiping straight back is free; resting on the copy, the
+     real list is sorted back behind it and the copy leaves the next frame,
+     unseen because it looked exactly like what replaced it. */
+
+  openStrip(view) {
+    const open = this.strip;
+    if (open) {
+      if (open.view !== view) return null;
+      clearTimeout(open.closer);
+      open.spring = null;
+      return open;
+    }
+    if (this.folding || this.spaces().length < 2) return null;
+    const el = this.listEl(view);
+    if (!el) return null;
+    const from = this.space;
+    const other = from ? from - 1 : from + 1;
     const ghost = el.cloneNode(true);
     ghost.classList.add(GHOST_CLASS);
     ghost.setAttr("aria-hidden", "true");
@@ -721,188 +768,269 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     });
     el.after(ghost);
     ghost.scrollTop = el.scrollTop;
-    gesture.ghost = ghost;
-    gesture.target = target;
-    gesture.sign = target > this.space ? 1 : -1;
-    this.spaceScroll[this.space] = el.scrollTop;
-    this.list(target);
-    el.scrollTop = this.spaceScroll[target] || 0;
-    return true;
-  }
-
-  /* Back to the space that is showing. later: the copy stays one more
-     frame, covering the list while it redraws under it. */
-  unprepare(gesture, later) {
-    const ghost = gesture.ghost;
-    if (!ghost) return;
-    gesture.ghost = null;
-    gesture.target = null;
-    gesture.el.style.transform = "";
-    this.list(this.space);
-    gesture.el.scrollTop = this.spaceScroll[this.space] || 0;
-    if (later) requestAnimationFrame(() => ghost.remove());
-    else ghost.remove();
-  }
-
-  /* offset is where the panel being left sits; its neighbour is a pane's
-     width beside it. */
-  place(gesture, offset) {
-    gesture.offset = offset;
-    if (gesture.ghost) {
-      gesture.ghost.style.transform = `translateX(${offset}px)`;
-      gesture.el.style.transform = `translateX(${offset + gesture.sign * gesture.el.offsetWidth}px)`;
-    } else {
-      gesture.el.style.transform = offset ? `translateX(${offset}px)` : "";
-    }
-  }
-
-  /* The strip follows the fingers one to one, as far as the neighbour and
-     no further. Past either end there is no neighbour, so the list gives a
-     little and no more. Returns whether the neighbour has fully arrived. */
-  dragTo(gesture, dx) {
-    gesture.dx = dx;
-    const width = gesture.el.offsetWidth || 1;
-    const sign = Math.sign(dx);
-    if (sign && this.prepare(gesture, this.space + sign)) {
-      this.place(gesture, -Math.max(-width, Math.min(width, dx)));
-      return Math.abs(dx) >= width;
-    }
-    this.unprepare(gesture, false);
-    this.place(gesture, -sign * SWIPE_EDGE_PX * (1 - Math.exp(-Math.abs(dx) / (SWIPE_EDGE_PX * 3))));
-    return false;
-  }
-
-  /* The strip glides the rest of the way: on to the neighbour, or back. */
-  async finish(gesture, commit) {
-    if (this.gesture === gesture) this.gesture = null;
-    clearTimeout(gesture.timer);
-    commit = commit && !!gesture.ghost;
-    const { el, ghost } = gesture;
+    this.spaceScroll[from] = el.scrollTop;
+    this.switching = true;
+    this.list(other);
+    el.scrollTop = this.spaceScroll[other] || 0;
+    el.addClass(STRIP_CLASS);
+    ghost.addClass(STRIP_CLASS);
     const width = el.offsetWidth || 1;
-    const from = gesture.offset || 0;
-    const to = commit ? -gesture.sign * width : 0;
-    const motion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (motion && from !== to) {
-      const duration = SWITCH_MS * Math.max(0.4, Math.abs(to - from) / width);
-      const slide = (target, shift) =>
-        target.animate([{ transform: `translateX(${from + shift}px)` }, { transform: `translateX(${to + shift}px)` }], {
-          duration,
-          easing: FOLD_EASING,
-          fill: "forwards",
-        }).finished.catch(() => {});
-      const slides = [slide(el, ghost ? gesture.sign * width : 0)];
-      if (ghost) slides.push(slide(ghost, 0));
-      await Promise.all(slides);
+    this.strip = { view, el, ghost, from, other, width, pos: from * width, vel: 0, at: 0, spring: null, frame: 0, dot: from };
+    this.paint();
+    return this.strip;
+  }
+
+  /* Where the strip shows pos: as is between the ends, and past them
+     resisting more the further it goes, as iOS does (c = 0.55). */
+  shown(strip) {
+    const max = (this.spaces().length - 1) * strip.width;
+    const band = (over) => (1 - 1 / ((over * RUBBER) / strip.width + 1)) * strip.width;
+    if (strip.pos < 0) return -band(-strip.pos);
+    if (strip.pos > max) return max + band(strip.pos - max);
+    return strip.pos;
+  }
+
+  paint() {
+    const strip = this.strip;
+    if (!strip) return;
+    const x = this.shown(strip);
+    strip.ghost.style.transform = `translate3d(${strip.from * strip.width - x}px, 0, 0)`;
+    strip.el.style.transform = `translate3d(${strip.other * strip.width - x}px, 0, 0)`;
+    /* The dot follows the strip, not the landing. */
+    const dot = Math.max(0, Math.min(this.spaces().length - 1, Math.round(x / strip.width)));
+    if (dot !== strip.dot) {
+      strip.dot = dot;
+      this.spaceDots.get(strip.view)?.querySelectorAll("." + SPACES_CLASS + "-dot").forEach((el, i) => el.toggleClass("is-active", i === dot));
     }
-    el.getAnimations().forEach((a) => a.cancel());
-    if (commit) {
-      this.space = gesture.target;
-      el.style.transform = "";
-      ghost.remove();
-      gesture.ghost = null;
-      this.renderDocks();
+  }
+
+  frame() {
+    const strip = this.strip;
+    if (strip && !strip.frame) strip.frame = requestAnimationFrame((t) => this.step(t));
+  }
+
+  step(now) {
+    const strip = this.strip;
+    if (!strip) return;
+    strip.frame = 0;
+    const spring = strip.spring;
+    if (spring) {
+      /* Small fixed steps, so a dropped frame cannot make it overshoot. */
+      let left = Math.min(0.064, Math.max(0, (now - spring.last) / 1000));
+      spring.last = now;
+      const k = Math.pow((2 * Math.PI) / SPRING_RESPONSE, 2);
+      const c = (4 * Math.PI * SPRING_DAMPING) / SPRING_RESPONSE;
+      while (left > 0) {
+        const dt = Math.min(left, 1 / 240);
+        spring.v += (-k * (strip.pos - spring.to) - c * spring.v) * dt;
+        strip.pos += spring.v * dt;
+        left -= dt;
+      }
+      if (Math.abs(strip.pos - spring.to) < 0.5 && Math.abs(spring.v) < 30) {
+        strip.pos = spring.to;
+        strip.spring = null;
+        this.paint();
+        this.settle();
+        return;
+      }
+      this.frame();
+    }
+    this.paint();
+  }
+
+  /* Fingers moved the strip by dx (positive: towards Later). */
+  drag(strip, dx, time) {
+    strip.spring = null;
+    strip.pos += dx;
+    const dt = Math.max(4, Math.min(64, time - (strip.at || time - 16)));
+    strip.vel = strip.at && time - strip.at < 100 ? strip.vel * 0.4 + (dx / dt) * 0.6 : dx / dt;
+    strip.at = time;
+    this.frame();
+  }
+
+  /* Fingers lifted, moving at vel px/ms: the spring takes the strip where
+     that speed was carrying it, one space at most. */
+  release(strip, vel = strip.vel) {
+    const count = this.spaces().length;
+    const start = Math.round(strip.pos / strip.width);
+    const aim = Math.round((strip.pos + vel * PROJECT_MS) / strip.width);
+    const to = Math.max(0, Math.min(count - 1, Math.max(start - 1, Math.min(start + 1, aim))));
+    this.springTo(strip, to, vel * 1000);
+  }
+
+  springTo(strip, space, v = 0) {
+    strip.spring = { to: space * strip.width, v, last: performance.now() };
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) strip.pos = strip.spring.to;
+    this.frame();
+  }
+
+  /* At rest on a space. On the real list: that space is showing now, and the
+     strip stays open a moment for a swipe straight back. On the copy: close
+     at once, since a copy takes no clicks. */
+  settle() {
+    const strip = this.strip;
+    const landed = Math.round(strip.pos / strip.width);
+    if (landed === strip.other) {
+      this.space = landed;
+      this.renderSpaces(strip.view);
+      strip.closer = window.setTimeout(() => this.closeStrip(), STRIP_LINGER_MS);
     } else {
-      ghost?.getAnimations().forEach((a) => a.cancel());
-      if (ghost) ghost.style.transform = "";
-      this.unprepare(gesture, true);
-      el.style.transform = "";
+      this.closeStrip();
+    }
+  }
+
+  closeStrip() {
+    const strip = this.strip;
+    if (!strip) return;
+    this.strip = null;
+    cancelAnimationFrame(strip.frame);
+    clearTimeout(strip.closer);
+    const landed = Math.max(0, Math.min(this.spaces().length - 1, Math.round(strip.pos / strip.width)));
+    strip.el.style.transform = "";
+    strip.el.removeClass(STRIP_CLASS);
+    this.space = landed;
+    if (landed === strip.other) {
+      strip.ghost.remove();
+    } else {
+      this.spaceScroll[strip.other] = strip.el.scrollTop;
+      this.list(landed);
+      strip.el.scrollTop = this.spaceScroll[landed] || 0;
+      /* One more frame of the copy, covering the list while it redraws. */
+      requestAnimationFrame(() => strip.ghost.remove());
     }
     this.switching = false;
+    this.renderSpaces(strip.view);
   }
 
-  begin(view) {
-    if (this.switching || this.folding || this.spaces().length < 2) return null;
-    const el = this.listEl(view);
-    if (!el) return null;
-    this.switching = true;
-    return (this.gesture = { view, el, dx: 0, offset: 0, ghost: null, target: null, sign: 0 });
-  }
-
-  /* A dot, or a command: the same slide, with no fingers on it. */
+  /* A dot, or a command: the same spring, with no fingers on it. */
   switchSpace(to) {
     const view = this.explorerViews()[0];
-    if (!view || to < 0 || to >= this.spaces().length || to === this.space) return;
-    const gesture = this.begin(view);
-    if (!gesture) return;
-    if (!this.prepare(gesture, to)) return this.finish(gesture, false);
-    this.place(gesture, 0);
-    this.finish(gesture, true);
+    if (!view || to < 0 || to >= this.spaces().length) return;
+    if (to === this.space && !this.strip) return;
+    const strip = this.openStrip(view);
+    if (strip) this.springTo(strip, to);
   }
 
-  /* A two-finger swipe arrives as wheel events with deltaX, and keeps
-     arriving as momentum after the fingers lift, with no event to say which
-     is which. So momentum simply carries the strip on, as a flick should;
-     the swipe ends when the events stop, and lands on whichever side holds
-     more than SWIPE_COMMIT of the pane. Once the neighbour has fully
-     arrived the rest of the momentum is swallowed. A gesture that starts
-     vertical stays a scroll. */
+  /* --- the trackpad ---------------------------------------------------------
+
+     A two-finger swipe arrives as wheel events with deltaX. After the
+     fingers lift, macOS keeps sending them as momentum, and no event says
+     which is which. Momentum gives itself away by shape: each delta smaller
+     than the last, smoothly. So while tracking, a run of shrinking deltas
+     well below the swipe's peak means the fingers have lifted, and the
+     spring takes over at the speed they had. While the spring runs, the
+     momentum that keeps arriving is swallowed, until a delta grows instead
+     of shrinking, or turns around: fingers are back on the trackpad, and
+     they take the strip wherever it is. A swipe that starts vertical stays a
+     scroll. */
   onWheel(view, evt) {
     if (evt.ctrlKey) return;
-    const horizontal = Math.abs(evt.deltaX) > Math.abs(evt.deltaY);
-    let gesture = this.gesture;
-    if (!gesture && this.swipeQuiet) {
-      if (!horizontal) return;
-      evt.preventDefault();
-      clearTimeout(this.swipeQuiet);
-      this.swipeQuiet = window.setTimeout(() => (this.swipeQuiet = null), SWIPE_QUIET_MS);
-      return;
+    const scale = evt.deltaMode === 1 ? 16 : evt.deltaMode === 2 ? view.containerEl.offsetWidth : 1;
+    const dx = evt.deltaX * scale;
+    const dy = evt.deltaY * scale;
+    const size = Math.abs(dx);
+    let wheel = this.wheel;
+    if (wheel && evt.timeStamp - wheel.last > WHEEL_GAP_MS) wheel = this.wheel = null;
+
+    if (wheel && wheel.view === view && wheel.phase === "coast") {
+      const grows = size > wheel.prev * 1.25 + 1.5;
+      const turns = dx && Math.sign(dx) !== wheel.sign && size >= 2;
+      if (!grows && !turns) {
+        if (size >= Math.abs(dy)) evt.preventDefault();
+        if (dx) wheel.prev = size;
+        wheel.last = evt.timeStamp;
+        this.armWheel(wheel);
+        return;
+      }
+      wheel = this.wheel = null;
     }
-    if (!gesture) {
-      if (!horizontal || !(gesture = this.begin(view))) return;
-      gesture.wheel = true;
+
+    if (!wheel) {
+      if (size <= Math.abs(dy)) return;
+      const strip = this.openStrip(view);
+      if (!strip) return;
+      wheel = this.wheel = { view, strip, phase: "track", recent: [], peak: 0, prev: 0, sign: Math.sign(dx), last: 0 };
     }
-    if (gesture.view !== view || !gesture.wheel) return;
+    if (wheel.view !== view) return;
     evt.preventDefault();
-    const scale = evt.deltaMode === 1 ? 16 : evt.deltaMode === 2 ? gesture.el.offsetWidth : 1;
-    clearTimeout(gesture.timer);
-    if (this.dragTo(gesture, gesture.dx + evt.deltaX * scale)) {
-      this.swipeQuiet = window.setTimeout(() => (this.swipeQuiet = null), SWIPE_QUIET_MS);
-      this.finish(gesture, true);
+    wheel.last = evt.timeStamp;
+    const strip = this.strip;
+    if (!strip) {
+      this.wheel = null;
       return;
     }
-    gesture.timer = window.setTimeout(
-      () => this.finish(gesture, Math.abs(gesture.dx) >= (gesture.el.offsetWidth || 1) * SWIPE_COMMIT),
-      SWIPE_END_MS
-    );
+    this.drag(strip, dx, evt.timeStamp);
+    if (dx) {
+      wheel.sign = Math.sign(dx);
+      wheel.recent.push(size);
+      if (wheel.recent.length > 4) wheel.recent.shift();
+      wheel.peak = Math.max(wheel.peak * 0.97, size);
+      wheel.prev = size;
+    }
+    const r = wheel.recent;
+    const shrinking = r.length === 4 && r[0] > r[1] && r[1] > r[2] && r[2] > r[3];
+    if (shrinking && size < wheel.peak * 0.6) {
+      wheel.phase = "coast";
+      this.release(strip);
+    }
+    this.armWheel(wheel);
   }
 
-  /* A finger decides on release: far enough, or fast enough. Once the swipe
-     reads as sideways it is the plugin's, so the drawer the pane sits in on
-     a phone does not also close under it. */
+  /* No event for a while: the fingers stopped, or lifted with no momentum.
+     A finger at rest has no speed, so the strip settles where it is nearer. */
+  armWheel(wheel) {
+    clearTimeout(wheel.timer);
+    wheel.timer = window.setTimeout(() => {
+      if (this.wheel !== wheel) return;
+      this.wheel = null;
+      if (wheel.phase === "track" && this.strip && !this.strip.spring) this.release(this.strip, 0);
+    }, WHEEL_GAP_MS);
+  }
+
+  /* --- the touchscreen ------------------------------------------------------
+
+     The same strip under one finger. A touch that lands on a moving strip
+     holds it; if the touch turns out to be a tap or a scroll, the strip is
+     let go again. Once a swipe reads as sideways it is the plugin's, so the
+     drawer the pane sits in on a phone does not also close under it. */
   onTouch(view, evt) {
     const touch = evt.touches[0] || evt.changedTouches[0];
     if (evt.type === "touchstart") {
-      this.touch = evt.touches.length === 1 && !this.gesture ? { view, x: touch.clientX, y: touch.clientY, claimed: null } : null;
+      if (evt.touches.length !== 1) return (this.touch = null);
+      const held = this.strip && this.strip.view === view && this.strip.spring ? this.openStrip(view) : null;
+      this.touch = { view, x: touch.clientX, y: touch.clientY, held, claimed: false };
       return;
     }
     const t = this.touch;
     if (!t || t.view !== view) return;
+    const letGo = () => {
+      this.touch = null;
+      if (t.held && this.strip === t.held && !t.held.spring) this.release(t.held, 0);
+    };
     if (evt.type === "touchmove") {
       if (!t.claimed) {
         const dx = t.x - touch.clientX;
         const dy = t.y - touch.clientY;
         if (Math.abs(dx) < SWIPE_SLOP_PX && Math.abs(dy) < SWIPE_SLOP_PX) return;
-        if (Math.abs(dx) <= Math.abs(dy) || !(t.claimed = this.begin(view))) {
-          this.touch = null;
-          return;
-        }
+        if (Math.abs(dx) <= Math.abs(dy) || !this.openStrip(view)) return letGo();
+        t.claimed = true;
         t.x = touch.clientX;
       }
       evt.stopPropagation();
       if (evt.cancelable) evt.preventDefault();
-      t.speed = (t.x - touch.clientX - t.claimed.dx) / Math.max(1, evt.timeStamp - (t.at || evt.timeStamp - 16));
-      t.at = evt.timeStamp;
-      this.dragTo(t.claimed, t.x - touch.clientX);
+      if (this.strip) this.drag(this.strip, t.x - touch.clientX, evt.timeStamp);
+      t.x = touch.clientX;
       return;
     }
     /* touchend, touchcancel */
+    if (!t.claimed) return letGo();
     this.touch = null;
-    const gesture = t.claimed;
-    if (!gesture) return;
     evt.stopPropagation();
-    const width = gesture.el.offsetWidth || 1;
-    const flick = Math.sign(t.speed || 0) === gesture.sign && Math.abs(t.speed) > SWIPE_FLICK;
-    this.finish(gesture, evt.type === "touchend" && (Math.abs(gesture.dx) >= width * SWIPE_COMMIT || flick));
+    const strip = this.strip;
+    if (!strip) return;
+    /* A finger that stopped before lifting has no speed left. */
+    const stale = evt.timeStamp - strip.at > 60;
+    this.release(strip, evt.type === "touchcancel" || stale ? 0 : strip.vel);
   }
 
   /* Each explorer listens once, for as long as the plugin is loaded. */
@@ -933,14 +1061,15 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     } else if (dots !== view.containerEl.lastElementChild) {
       view.containerEl.appendChild(dots);
     }
-    const key = [this.space, ...spaces.map((s) => s.name)].join("\n");
+    const active = this.strip && this.strip.view === view ? this.strip.dot : this.space;
+    const key = [active, ...spaces.map((s) => s.name)].join("\n");
     if (dots.dataset.key === key) return;
     dots.dataset.key = key;
     dots.empty();
     spaces.forEach((space, i) => {
       const dot = dots.createEl("button", {
-        cls: SPACES_CLASS + "-dot" + (i === this.space ? " is-active" : ""),
-        attr: { "aria-label": space.name, "data-tooltip-position": "top", "aria-pressed": String(i === this.space) },
+        cls: SPACES_CLASS + "-dot" + (i === active ? " is-active" : ""),
+        attr: { "aria-label": space.name, "data-tooltip-position": "top" },
       });
       dot.addEventListener("click", (evt) => {
         evt.preventDefault();
@@ -954,7 +1083,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   /* The root's notes, in the explorer's order, minus what Hide Files hides.
      None when the root is the source folder: they are the mind already. */
   rootNotes(view) {
-    if (!this.folderAt(this.settings.sourceFolder)) return [];
+    if (this.spaceFolders()[0].isRoot()) return [];
     const hidden = this.app.plugins?.plugins?.["hide-files"]?.hidden;
     const compare = COMPARE[view.sortOrder] || COMPARE.alphabetical;
     return [...this.rootFiles]

@@ -237,6 +237,12 @@ body.folder-drawer-active .workspace-leaf-content[data-type="file-explorer"] .na
   touch-action: pan-y;
 }
 
+/* Both panels get their own compositor layer while the strip is open, so
+   moving them is a transform and never a layout. */
+.folder-drawer-strip {
+  will-change: transform;
+}
+
 .folder-drawer-ghost {
   margin: 0;
   pointer-events: none;
