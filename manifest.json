@@ -1,9 +1,9 @@
 {
   "id": "folder-drawer",
   "name": "Folder Drawer",
-  "version": "2.4.1",
+  "version": "2.5.0",
   "minAppVersion": "1.7.2",
-  "description": "The File Explorer shows the notes at the vault root, then every note tagged #project/in-progress under a small Projects heading. Folders leave the explorer.",
+  "description": "The File Explorer splits into Todo, Inbox, Mind and Projects sections, with the vault root docked below. Folders leave the explorer.",
   "author": "Jimmy Zhang",
   "isDesktopOnly": false,
   "authorUrl": "https://jimmyzhang.org"

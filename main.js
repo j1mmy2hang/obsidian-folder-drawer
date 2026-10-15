@@ -3,13 +3,24 @@
 /*
  * Folder Drawer
  *
- * Turns the core File Explorer into three lists:
+ * Turns the core File Explorer into five lists, in this order:
  *
- *   MIND      — the notes at the vault root: what just arrived, not sorted yet
- *   INBOX     — root notes that came from outside (clippings, the daily vocab,
- *               the weekly letter), by a value in their `descriptive` list
+ *   TODO      — source notes whose `descriptive` list holds "todo"; the
+ *               heading opens todo.md.md
+ *   INBOX     — source notes to read (clippings, AI-written notes, research
+ *               overviews), by a value in their `descriptive` list
+ *   MIND      — the rest of the source folder (the vault root, or the one
+ *               named in settings): notes to think through
  *   PROJECTS  — every note tagged #project/in-progress, wherever it lives in
  *               the vault
+ *   ROOT      — the notes at the vault root, when the source folder is
+ *               another one: what just landed, not yet moved anywhere. Not in
+ *               the list: a dock pinned under it, at the bottom of the pane
+ *
+ * With Move todos on, a todo note files itself by its do date: today or
+ * earlier into the source folder, later into the later folder. Only notes
+ * at the root or already in one of those two are moved, so an archived todo
+ * stays archived. The note open in the active tab moves once another opens.
  *
  * Folders leave the explorer entirely; reach them through search, the Quick
  * Switcher, or any other pane. A root note that is also an active project
@@ -23,9 +34,10 @@
  * The explorer is virtualised and builds rows from its own sorted model, so
  * the change is made where the model is made: getSortedFolderItems, wrapped
  * (not replaced — other plugins may wrap it too, and the explorer's sort order still
- * orders every section). For the root it returns the mind notes, the inbox
- * notes, then the project notes, which are real explorer items borrowed from their folders.
- * Each folder's own list drops its project notes, so no item is claimed by two
+ * orders every section). For the root it returns the todo notes, the inbox
+ * notes, the mind notes, then the project notes, which are real explorer items borrowed from their folders.
+ * A source folder other than the root lends its notes the same way.
+ * Each folder's own list drops what was borrowed, so no item is claimed by two
  * parents: a tree item belongs to whichever list last called setChildren on it.
  * Indentation is measured from where a row actually sits, so a borrowed row
  * lands flush with the root notes on its own.
@@ -41,7 +53,7 @@
  * row it measures, so nothing moves that Obsidian does not know about.
  */
 
-const { Plugin, PluginSettingTab, Setting, TFile, Keymap, getAllTags, debounce, setIcon } = require("obsidian");
+const { Plugin, PluginSettingTab, Setting, TFile, TFolder, Keymap, Menu, moment, normalizePath, getAllTags, debounce, setIcon } = require("obsidian");
 
 const ACTIVE_CLASS = "folder-drawer-active";
 const HEADING_CLASS = "folder-drawer-heading";
@@ -52,6 +64,8 @@ const TOP_SEAM_CLASS = "folder-drawer-seam-top";
 const FOLDED_CLASS = "folder-drawer-folded";
 /* A row, or a seam row's own content, while a fold animates it. */
 const FOLDING_CLASS = "folder-drawer-folding";
+/* The root section's own panel, below the scrolling list. */
+const DOCK_CLASS = "folder-drawer-dock";
 const FOLD_MS = 260;
 const FOLD_EASING = "cubic-bezier(0.2, 0, 0, 1)";
 
@@ -69,7 +83,21 @@ const DEFAULT_SETTINGS = {
      these go under the inbox heading instead of the mind heading. */
   inboxValues: ["clipping", "daily-vocab", "weekly-letter"],
   inboxHeading: "Inbox",
+  /* Source-folder notes holding one of these go under the todo heading,
+     which opens todoLink. Todo wins over inbox. */
+  todoValues: ["todo"],
+  todoHeading: "Todo",
+  todoLink: "todo.md.md",
+  /* Move todo notes between the source folder and laterFolder by the date
+     in doDateProperty. Off by default: it moves files. */
+  moveTodos: false,
+  doDateProperty: "do date",
+  laterFolder: "later",
   mindHeading: "Mind",
+  rootHeading: "Inbox",
+  /* The folder whose notes fill the mind and inbox sections. Empty is the
+     vault root. */
+  sourceFolder: "",
   /* Sections folded under their heading. */
   collapsed: [],
 };
@@ -102,6 +130,11 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.sections = new WeakMap();
     this.projects = new Set();
     this.inbox = new Set();
+    this.todo = new Set();
+    this.loose = new Set();
+    this.rootFiles = new Set();
+    /* view → its dock element, and the dock's last-drawn contents. */
+    this.docks = new WeakMap();
 
     document.body.classList.add(ACTIVE_CLASS);
     this.addSettingTab(new FolderDrawerSettingTab(this.app, this));
@@ -112,22 +145,50 @@ module.exports = class FolderDrawerPlugin extends Plugin {
        leaf stays deferred until opened. */
     this.app.workspace.onLayoutReady(() => {
       this.scan();
+      this.placeTodos();
       this.refresh();
     });
     this.registerEvent(this.app.workspace.on("layout-change", () => this.refresh()));
+    /* A date that was in the future becomes today at midnight, with no
+       event to say so: check once a minute whether the day turned. */
+    this.registerInterval(
+      window.setInterval(() => {
+        if (this.day !== moment().format("YYYY-MM-DD")) this.placeTodos();
+      }, 60 * 1000)
+    );
     this.registerEvent(this.app.workspace.on("active-leaf-change", () => this.refresh()));
 
     /* Tagging a note or taking the tag off is a metadata change, not a vault
        one, so the explorer would never re-sort by itself. Only re-sort when
        the set of projects actually changed. */
     const rescan = debounce(() => this.rescan(), 200, true);
-    this.registerEvent(this.app.metadataCache.on("changed", rescan));
+    /* The explorer sorts a frame after a file event, and a note sorted by
+       stale lists shows up in the wrong section first, then jumps. So the
+       note itself is placed at once; the debounced rescan only confirms. */
+    const now = (file) => {
+      if (file instanceof TFile) {
+        this.placeTodos(file);
+        /* The sort redraws the dock too, in the same frame as the list. */
+        if (this.track(file)) this.resort();
+      } else {
+        this.scan();
+      }
+      rescan();
+    };
+    this.registerEvent(this.app.metadataCache.on("changed", now));
     this.registerEvent(this.app.metadataCache.on("resolved", rescan));
-    this.registerEvent(this.app.vault.on("delete", rescan));
-    this.registerEvent(this.app.vault.on("rename", rescan));
+    this.registerEvent(this.app.vault.on("create", now));
+    this.registerEvent(this.app.vault.on("delete", now));
+    this.registerEvent(this.app.vault.on("rename", now));
 
     /* The heading lights up while its note is the one open, as a row does. */
-    this.registerEvent(this.app.workspace.on("file-open", () => this.syncHeadings()));
+    this.registerEvent(
+      this.app.workspace.on("file-open", () => {
+        this.placeTodos();
+        this.syncHeadings();
+        this.syncDockActive();
+      })
+    );
     this.registerEvent(this.app.vault.on("rename", () => this.syncHeadings()));
   }
 
@@ -135,6 +196,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     document.body.classList.remove(ACTIVE_CLASS);
     this.clearFold();
     document.querySelectorAll("." + HEADING_CLASS).forEach((el) => el.remove());
+    document.querySelectorAll("." + DOCK_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS, FOLDED_CLASS));
     this.restore();
     this.resort();
@@ -144,6 +206,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     await this.saveData(this.settings);
     this.headings = new WeakMap();
     document.querySelectorAll("." + HEADING_CLASS).forEach((el) => el.remove());
+    document.querySelectorAll("." + DOCK_CLASS).forEach((el) => el.remove());
     this.rescan(true);
   }
 
@@ -160,10 +223,22 @@ module.exports = class FolderDrawerPlugin extends Plugin {
      rows below start where they were and slide down, and the section fades
      in behind them. The virtualiser's cached heights are dropped at the end. */
   async toggleSection(section) {
+    /* The dock is outside the virtualised list: nothing to slide past. */
+    if (section === "root") {
+      this.settings.collapsed = this.isCollapsed(section)
+        ? this.settings.collapsed.filter((s) => s !== section)
+        : this.settings.collapsed.concat(section);
+      this.saveData(this.settings);
+      this.renderDocks();
+      return;
+    }
     if (this.folding) return;
     this.folding = true;
     const closing = !this.isCollapsed(section);
     const motion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    /* The chevron turns with the rows, not after them: a close sorts only
+       once its slide lands. */
+    for (const view of this.explorerViews()) this.headings.get(view)?.get(section)?.toggleClass("is-collapsed", closing);
     try {
       if (closing && motion) await this.fold(section, false);
       this.settings.collapsed = closing
@@ -260,6 +335,58 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     await Promise.all(animations.map((a) => a.finished.catch(() => {})));
   }
 
+  /* Rows glide to where a sort put them instead of jumping there. The root
+     sort notes where every row is before the explorer redraws; in the frame
+     the redraw lands, each row that moved starts from its old place and
+     slides home, and a new one fades in. Old places are measured with any
+     glide still running, so a sort mid-glide carries on from where the rows
+     are. */
+  glide(view) {
+    if (this.folding || this.glideFrame?.has(view)) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const before = this.rowTops(view);
+    if (!before.size) return;
+    this.glideFrame = this.glideFrame || new Set();
+    this.glideFrame.add(view);
+    requestAnimationFrame(() => {
+      this.glideFrame.delete(view);
+      if (this.folding) return;
+      for (const a of this.glides || []) a.cancel();
+      const after = this.rowTops(view);
+      const animations = [];
+      for (const [path, { el, top }] of after) {
+        const was = before.get(path);
+        if (!was) {
+          animations.push(el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FOLD_MS, easing: "linear" }));
+        } else if (Math.abs(was.top - top) > 0.5) {
+          animations.push(
+            el.animate([{ transform: `translateY(${was.top - top}px)` }, { transform: "none" }], {
+              duration: FOLD_MS,
+              easing: FOLD_EASING,
+            })
+          );
+        }
+      }
+      this.glides = animations;
+      if (!animations.length) return;
+      /* The virtualiser measures rows; let it measure them at rest. */
+      Promise.all(animations.map((a) => a.finished)).then(
+        () => view.tree?.infinityScroll?.invalidateAll?.(),
+        () => {}
+      );
+    });
+  }
+
+  /* Each drawn note row's top, by path. */
+  rowTops(view) {
+    const tops = new Map();
+    view.containerEl.querySelectorAll(".nav-files-container .tree-item.nav-file").forEach((el) => {
+      const path = el.querySelector(":scope > .nav-file-title")?.dataset.path;
+      if (path && el.offsetParent) tops.set(path, { el, top: el.getBoundingClientRect().top });
+    });
+    return tops;
+  }
+
   clearFold() {
     for (const a of this.foldAnimations || []) a.cancel();
     this.foldAnimations = [];
@@ -268,32 +395,128 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   /* --- which notes are projects ---------------------------------------- */
 
-  /* Projects anywhere in the vault; inbox notes at the root only. */
+  /* The folder the mind and inbox notes come from; the root when the
+     setting is empty or names no folder. */
+  sourceFolder() {
+    const path = this.settings.sourceFolder.trim().replace(/^\/+|\/+$/g, "");
+    const folder = path && this.app.vault.getAbstractFileByPath(path);
+    return folder instanceof TFolder ? folder : this.app.vault.getRoot();
+  }
+
+  /* Projects anywhere in the vault; inbox notes in the source folder only. */
   scan() {
-    const want = normalize(this.settings.projectTag);
-    const inboxWant = new Set(this.settings.inboxValues.map(normalize).filter(Boolean));
-    const projects = new Set();
-    const inbox = new Set();
-    const key = this.settings.projectProperty.trim();
-    const cache = this.app.metadataCache;
-    for (const file of this.app.vault.getMarkdownFiles()) {
-      const meta = cache.getFileCache(file);
-      if (!meta) continue;
-      const values = (key ? [].concat(meta.frontmatter?.[key] ?? []) : getAllTags(meta) || [])
-        .filter((v) => typeof v === "string")
-        .map(normalize);
-      if (want && values.some((v) => v === want || v.startsWith(want + "/"))) projects.add(file);
-      else if (file.parent?.isRoot() && values.some((v) => inboxWant.has(v))) inbox.add(file);
-    }
-    this.projects = projects;
-    this.inbox = inbox;
+    this.projects = new Set();
+    this.inbox = new Set();
+    this.todo = new Set();
+    this.loose = new Set();
+    this.rootFiles = new Set();
+    const rules = this.rules();
+    for (const file of this.app.vault.getMarkdownFiles()) this.file(file, rules);
+  }
+
+  rules() {
+    return {
+      source: this.sourceFolder(),
+      want: normalize(this.settings.projectTag),
+      inboxWant: new Set(this.settings.inboxValues.map(normalize).filter(Boolean)),
+      todoWant: new Set(this.settings.todoValues.map(normalize).filter(Boolean)),
+      key: this.settings.projectProperty.trim(),
+    };
+  }
+
+  /* Adds one note to the lists it belongs in. */
+  file(file, { source, want, inboxWant, todoWant, key }) {
+    /* A note on its way elsewhere shows up only once it arrives, not for a
+       moment where it was. */
+    const to = this.moving?.get(file);
+    if (to && to !== file.path) return;
+    if (file.parent === source) this.loose.add(file);
+    else if (file.parent?.isRoot()) this.rootFiles.add(file);
+    const meta = this.app.metadataCache.getFileCache(file);
+    if (!meta) return;
+    const values = (key ? [].concat(meta.frontmatter?.[key] ?? []) : getAllTags(meta) || [])
+      .filter((v) => typeof v === "string")
+      .map(normalize);
+    if (want && values.some((v) => v === want || v.startsWith(want + "/"))) this.projects.add(file);
+    else if (file.parent === source && values.some((v) => todoWant.has(v))) this.todo.add(file);
+    else if (file.parent === source && values.some((v) => inboxWant.has(v))) this.inbox.add(file);
+  }
+
+  /* Re-files one note after it was created, changed, moved or deleted.
+     Returns whether any list changed. */
+  track(file) {
+    const sets = [this.projects, this.inbox, this.todo, this.loose, this.rootFiles];
+    const before = sets.map((set) => set.has(file));
+    for (const set of sets) set.delete(file);
+    if (file.extension === "md" && this.app.vault.getAbstractFileByPath(file.path) === file) this.file(file, this.rules());
+    return sets.some((set, i) => set.has(file) !== before[i]);
   }
 
   rescan(force = false) {
     const same = (a, b) => a.size === b.size && [...b].every((f) => a.has(f));
-    const before = [this.projects, this.inbox];
+    const before = [this.projects, this.inbox, this.todo, this.loose, this.rootFiles];
     this.scan();
-    if (force || !same(before[0], this.projects) || !same(before[1], this.inbox)) this.resort();
+    this.placeTodos();
+    const after = [this.projects, this.inbox, this.todo, this.loose, this.rootFiles];
+    if (force || before.some((set, i) => !same(set, after[i]))) this.resort();
+    this.renderDocks();
+  }
+
+  /* --- filing todos by do date -------------------------------------------- */
+
+  folderAt(path) {
+    const clean = (path || "").trim().replace(/^\/+|\/+$/g, "");
+    const folder = clean && this.app.vault.getAbstractFileByPath(clean);
+    return folder instanceof TFolder ? folder : null;
+  }
+
+  /* Each todo at the root, in the source folder or in the later folder goes
+     where its do date says. A note without a full date (or with a template's
+     placeholder) stays put, and so does one whose name is taken there. */
+  placeTodos(only) {
+    this.day = moment().format("YYYY-MM-DD");
+    if (!this.settings.moveTodos) return false;
+    const now = this.folderAt(this.settings.sourceFolder);
+    const later = this.folderAt(this.settings.laterFolder);
+    if (!now || !later) return false;
+    const root = this.app.vault.getRoot();
+    const todoWant = new Set(this.settings.todoValues.map(normalize).filter(Boolean));
+    const key = this.settings.projectProperty.trim();
+    const cache = this.app.metadataCache;
+    /* note → the path it is moving to */
+    this.moving = this.moving || new Map();
+    let started = false;
+    /* The note being worked in waits until another one opens: renaming an
+       open file redraws its inline title, which drops the focus and the
+       selection a new note is born with. */
+    const active = this.app.workspace.getActiveFile();
+    for (const file of only ? [only] : this.app.vault.getMarkdownFiles()) {
+      if (file.extension !== "md") continue;
+      if (file.parent !== root && file.parent !== now && file.parent !== later) continue;
+      if (file === active || this.moving.has(file)) continue;
+      const meta = cache.getFileCache(file);
+      if (!meta || !meta.frontmatter) continue;
+      const values = (key ? [].concat(meta.frontmatter[key] ?? []) : getAllTags(meta) || [])
+        .filter((v) => typeof v === "string")
+        .map(normalize);
+      if (!values.some((v) => todoWant.has(v))) continue;
+      const date = String(meta.frontmatter[this.settings.doDateProperty] ?? "").trim();
+      if (!/^\d{4}-\d{2}-\d{2}(?![\d])/.test(date)) continue;
+      const target = date.slice(0, 10) <= this.day ? now : later;
+      if (file.parent === target) continue;
+      const path = normalizePath(target.path + "/" + file.name);
+      if (this.app.vault.getAbstractFileByPath(path)) continue;
+      this.moving.set(file, path);
+      started = true;
+      this.app.fileManager
+        .renameFile(file, path)
+        .catch((e) => console.error("Folder Drawer: could not move", file.path, e))
+        .finally(() => {
+          this.moving.delete(file);
+          if (this.track(file)) this.resort();
+        });
+    }
+    return started;
   }
 
   /* --- the explorer ------------------------------------------------------ */
@@ -335,14 +558,20 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       /* If another plugin wrapped this wrapper, unloading cannot unhook it;
          the guard makes it inert instead. */
       if (!plugin._loaded) return items;
-      const { projects, inbox } = plugin;
+      const { projects, inbox, todo } = plugin;
 
+      const source = plugin.sourceFolder();
       if (!folder || !folder.isRoot()) {
+        /* The source folder's notes are listed at the root instead. */
+        if (folder === source) return items.filter((item) => !(item && item.file instanceof TFile));
         return items.filter((item) => !(item && projects.has(item.file)));
       }
 
-      const loose = items.filter((item) => item && item.file instanceof TFile && !projects.has(item.file));
-      const mind = loose.filter((item) => !inbox.has(item.file));
+      plugin.glide(this);
+      const sourceItems = source.isRoot() ? items : original.call(this, source);
+      const loose = sourceItems.filter((item) => item && item.file instanceof TFile && !projects.has(item.file));
+      const todoItems = loose.filter((item) => todo.has(item.file));
+      const mind = loose.filter((item) => !inbox.has(item.file) && !todo.has(item.file));
       const inboxItems = loose.filter((item) => inbox.has(item.file));
       const compare = COMPARE[this.sortOrder] || COMPARE.alphabetical;
       const borrowed = [...projects]
@@ -352,14 +581,23 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       /* Skip rows a file-hider has switched off: they take no space, so a
          heading parked in one would have no band to sit in. */
       const first = (list) => list.find((item) => item.el && item.el.style.display !== "none");
-      const firsts = { mind: first(mind), inbox: first(inboxItems), projects: first(borrowed) };
-      plugin.sections.set(this, { mind, inbox: inboxItems, projects: borrowed });
+      /* Key order is list order: the first key's seam is the top one. */
+      const firsts = {
+        todo: first(todoItems),
+        inbox: first(inboxItems),
+        mind: first(mind),
+        projects: first(borrowed),
+      };
+      plugin.sections.set(this, { todo: todoItems, mind, inbox: inboxItems, projects: borrowed });
+      /* Every change at the root re-sorts the root, so the dock is redrawn
+         here; it skips the work when nothing it shows has changed. */
+      plugin.renderDock(this);
       plugin.placeHeadings(this, firsts);
       /* A folded section keeps only the row its heading rides in, so the
          virtualiser never builds or measures the rest. */
       const shown = (section, list) =>
         plugin.isCollapsed(section) ? (firsts[section] ? [firsts[section]] : []) : list;
-      return shown("mind", mind).concat(shown("inbox", inboxItems), shown("projects", borrowed));
+      return shown("todo", todoItems).concat(shown("inbox", inboxItems), shown("mind", mind), shown("projects", borrowed));
     };
 
     proto.getSortedFolderItems = this.wrapper;
@@ -384,6 +622,92 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       const scroll = view.tree && view.tree.infinityScroll;
       if (scroll && typeof scroll.invalidateAll === "function") scroll.invalidateAll();
     }
+  }
+
+  /* --- the root dock -------------------------------------------------------- */
+
+  /* The root's notes, in the explorer's order, minus what Hide Files hides.
+     None when the root is the source folder: they are the mind already. */
+  rootNotes(view) {
+    if (this.sourceFolder().isRoot()) return [];
+    const hidden = this.app.plugins?.plugins?.["hide-files"]?.hidden;
+    const compare = COMPARE[view.sortOrder] || COMPARE.alphabetical;
+    return [...this.rootFiles]
+      .filter((file) => !this.projects.has(file) && !(hidden && hidden.has(file.path)))
+      .sort(compare);
+  }
+
+  renderDocks() {
+    for (const view of this.explorerViews()) this.renderDock(view);
+  }
+
+  /* A panel after the scrolling list, so it sits at the bottom of the pane
+     whatever the list's length. Its rows are the plugin's own, not the
+     virtualiser's, built with the explorer's classes so they look the same. */
+  renderDock(view) {
+    const files = this.rootNotes(view);
+    let dock = this.docks.get(view);
+    if (!files.length) {
+      dock?.remove();
+      this.docks.delete(view);
+      return;
+    }
+    const collapsed = this.isCollapsed("root");
+    const key = [collapsed, this.settings.rootHeading, ...files.map((f) => f.path)].join("\n");
+    if (dock && dock.isConnected && dock.parentElement === view.containerEl && dock.dataset.key === key) return;
+    if (!dock || dock.parentElement !== view.containerEl) {
+      dock?.remove();
+      dock = view.containerEl.createDiv({ cls: DOCK_CLASS });
+      this.docks.set(view, dock);
+    }
+    dock.dataset.key = key;
+    dock.empty();
+    dock.toggleClass("is-collapsed", collapsed);
+    const heading = this.headingFor(view, "root");
+    dock.appendChild(heading);
+    this.syncHeading(heading);
+    if (collapsed) return;
+    const list = dock.createDiv({ cls: DOCK_CLASS + "-list" });
+    for (const file of files) this.dockRow(view, list, file);
+    this.syncDockActive();
+  }
+
+  /* Opens, previews, drags and right-clicks like an explorer row. */
+  dockRow(view, list, file) {
+    const item = list.createDiv({ cls: "tree-item nav-file" });
+    const self = item.createDiv({
+      cls: "tree-item-self nav-file-title tappable is-clickable",
+      attr: { "data-path": file.path, draggable: "true" },
+    });
+    self.createDiv({ cls: "tree-item-inner nav-file-title-content", text: file.extension === "md" ? file.basename : file.name });
+    const workspace = this.app.workspace;
+    const open = (evt, newTab) => {
+      workspace.getLeaf(newTab || Keymap.isModEvent(evt)).openFile(file);
+    };
+    self.addEventListener("click", (evt) => open(evt, false));
+    self.addEventListener("auxclick", (evt) => {
+      if (evt.button === 1) open(evt, "tab");
+    });
+    self.addEventListener("contextmenu", (evt) => {
+      evt.preventDefault();
+      const menu = new Menu();
+      workspace.trigger("file-menu", menu, file, "file-explorer");
+      menu.showAtMouseEvent(evt);
+    });
+    self.addEventListener("mouseover", (evt) => {
+      workspace.trigger("hover-link", { event: evt, source: "file-explorer", hoverParent: view, targetEl: self, linktext: file.path });
+    });
+    self.addEventListener("dragstart", (evt) => {
+      const drag = this.app.dragManager;
+      if (drag && typeof drag.dragFile === "function") drag.onDragStart(evt, drag.dragFile(evt, file));
+    });
+  }
+
+  syncDockActive() {
+    const path = this.app.workspace.getActiveFile()?.path;
+    document.querySelectorAll("." + DOCK_CLASS + " .nav-file-title").forEach((el) => {
+      el.toggleClass("is-active", el.dataset.path === path);
+    });
   }
 
   /* --- the headings -------------------------------------------------------- */
@@ -414,8 +738,8 @@ module.exports = class FolderDrawerPlugin extends Plugin {
      vault. Looked up on every use, so renaming or moving it never strands
      the heading. */
   headingTarget(section = "projects") {
-    if (section !== "projects") return null;
-    const want = (this.settings.headingLink || "").trim().replace(/^\/+/, "");
+    const link = { projects: this.settings.headingLink, todo: this.settings.todoLink }[section];
+    const want = (link || "").trim().replace(/^\/+/, "");
     if (!want) return null;
     const vault = this.app.vault;
     const exact = vault.getAbstractFileByPath(want);
@@ -454,13 +778,13 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     workspace.setActiveLeaf(workspace.getMostRecentLeaf(), { focus: true });
   }
 
-  /* Only the projects heading links to a note; the others are labels. */
+  /* The projects and todo headings link to a note; the others are labels. */
   headingFor(view, section) {
     let headings = this.headings.get(view);
     if (!headings) this.headings.set(view, (headings = new Map()));
     let heading = headings.get(section);
     if (!heading) {
-      const text = { mind: this.settings.mindHeading, inbox: this.settings.inboxHeading, projects: this.settings.heading }[section];
+      const text = { root: this.settings.rootHeading, todo: this.settings.todoHeading, mind: this.settings.mindHeading, inbox: this.settings.inboxHeading, projects: this.settings.heading }[section];
       heading = createDiv({ cls: HEADING_CLASS });
       heading.dataset.section = section;
       heading.createSpan({ cls: HEADING_CLASS + "-label", text });
@@ -548,8 +872,22 @@ class FolderDrawerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Source folder")
+      .setDesc("The folder whose notes are listed under the mind and inbox headings. Leave empty for the vault root.")
+      .addText((text) =>
+        text
+          .setPlaceholder("today")
+          .setValue(this.plugin.settings.sourceFolder)
+          .onChange(async (value) => {
+            this.plugin.settings.sourceFolder = value.trim();
+            await this.plugin.saveData(this.plugin.settings);
+            this.plugin.rescan(true);
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Inbox values")
-      .setDesc("Root notes whose project property (or tags) holds one of these, separated by commas, are listed under the inbox heading.")
+      .setDesc("Source-folder notes whose project property (or tags) holds one of these, separated by commas, are listed under the inbox heading.")
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_SETTINGS.inboxValues.join(", "))
@@ -560,9 +898,68 @@ class FolderDrawerSettingTab extends PluginSettingTab {
           })
       );
 
+    new Setting(containerEl)
+      .setName("Todo values")
+      .setDesc("Source-folder notes whose project property (or tags) holds one of these, separated by commas, are listed under the todo heading.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.todoValues.join(", "))
+          .setValue(this.plugin.settings.todoValues.join(", "))
+          .onChange(async (value) => {
+            this.plugin.settings.todoValues = value.split(",").map(normalize).filter(Boolean);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Move todos")
+      .setDesc("Move each todo note by its do date: today or earlier into the source folder, later into the later folder. Only notes at the root or in those two folders move.")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.moveTodos).onChange(async (value) => {
+          this.plugin.settings.moveTodos = value;
+          await this.plugin.saveData(this.plugin.settings);
+          this.plugin.placeTodos();
+        })
+      );
+
     for (const [key, name, desc] of [
-      ["mindHeading", "Mind heading", "The heading above the root notes."],
+      ["doDateProperty", "Do date property", "The frontmatter date that decides where a todo goes."],
+      ["laterFolder", "Later folder", "Where todos with a future do date go."],
+    ]) {
+      new Setting(containerEl)
+        .setName(name)
+        .setDesc(desc)
+        .addText((text) =>
+          text
+            .setPlaceholder(DEFAULT_SETTINGS[key])
+            .setValue(this.plugin.settings[key])
+            .onChange(async (value) => {
+              this.plugin.settings[key] = value.trim() || DEFAULT_SETTINGS[key];
+              await this.plugin.saveData(this.plugin.settings);
+              this.plugin.placeTodos();
+            })
+        );
+    }
+
+    new Setting(containerEl)
+      .setName("Todo heading link")
+      .setDesc("The note the todo heading opens: a file name or a vault path. Leave empty for a plain heading.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.todoLink)
+          .setValue(this.plugin.settings.todoLink)
+          .onChange(async (value) => {
+            this.plugin.settings.todoLink = value.trim();
+            await this.plugin.saveData(this.plugin.settings);
+            this.plugin.syncHeadings();
+          })
+      );
+
+    for (const [key, name, desc] of [
+      ["todoHeading", "Todo heading", "The heading above the todo notes."],
+      ["mindHeading", "Mind heading", "The heading above the source folder's notes."],
       ["inboxHeading", "Inbox heading", "The heading above the inbox notes."],
+      ["rootHeading", "Root heading", "The heading above the vault root's notes, when the source folder is another one."],
     ]) {
       new Setting(containerEl)
         .setName(name)

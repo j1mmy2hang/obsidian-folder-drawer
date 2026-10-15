@@ -10,7 +10,8 @@
    section label belongs to what is under it, so it sits nearer that.
    ---------------------------------------------------------------------- */
 
-.nav-files-container {
+.nav-files-container,
+.folder-drawer-dock {
   --folder-drawer-band: 44px;
   --folder-drawer-band-center: 26px;
   /* One row's height, built the way Obsidian builds a row: a line of text
@@ -21,7 +22,8 @@
   );
 }
 
-body.is-mobile .nav-files-container {
+body.is-mobile .nav-files-container,
+body.is-mobile .folder-drawer-dock {
   --folder-drawer-band: 48px;
   --folder-drawer-band-center: 28px;
 }
@@ -149,7 +151,6 @@ body.is-mobile .folder-drawer-heading {
   width: 18px;
   height: 18px;
   margin-inline-start: 4px;
-  border-radius: var(--radius-s);
   color: var(--text-faint);
   cursor: var(--cursor-link, pointer);
   opacity: 0;
@@ -177,7 +178,6 @@ body.is-mobile .folder-drawer-heading {
   }
   .folder-drawer-heading-chevron:hover {
     color: var(--text-normal);
-    background-color: var(--background-modifier-hover);
   }
 }
 
@@ -188,4 +188,34 @@ body.is-mobile .folder-drawer-heading {
   .folder-drawer-heading-chevron:active {
     opacity: 1;
   }
+}
+
+/* --- The root dock ----------------------------------------------------------
+
+   The root's notes sit in their own panel after the scrolling list, so they
+   stay at the bottom of the pane. The pane is a flex column and the list
+   grows to fill it, so the dock needs no positioning of its own. Its
+   padding repeats the list's, so its rows and heading line up with the
+   list's. It scrolls on its own past 40% of the pane.
+   ---------------------------------------------------------------------- */
+
+.folder-drawer-dock {
+  flex: 0 0 auto;
+  max-height: 40%;
+  overflow-y: auto;
+  padding: 6px 8px 32px 20px;
+}
+
+.folder-drawer-dock .folder-drawer-heading {
+  position: relative;
+  top: 0;
+  margin-bottom: 5px;
+}
+
+.folder-drawer-dock.is-collapsed .folder-drawer-heading {
+  margin-bottom: 0;
+}
+
+.folder-drawer-dock .tree-item-self {
+  padding-inline-start: 12px;
 }

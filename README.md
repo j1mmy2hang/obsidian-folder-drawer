@@ -1,14 +1,21 @@
 # Folder Drawer
 
-An Obsidian plugin that turns the File Explorer into two short lists:
+An Obsidian plugin that turns the File Explorer into a few short lists, each
+under its own heading:
 
-- **the notes at the vault root**, the things still being worked out;
-- a small **PROJECTS** heading, then every note marked `project/in-progress`,
-  wherever it lives in the vault.
+- **Todo**: notes in the source folder marked `todo`;
+- **Inbox**: notes in the source folder to read, by a value such as `clipping`;
+- **Mind**: the rest of the source folder, the things still being worked out;
+- **Projects**: every note marked `project/in-progress`, wherever it lives;
+- **Root**: when the source folder is not the vault root, the notes that just
+  landed at the root, in a panel pinned to the bottom of the pane.
+
+The source folder is the vault root unless you name another. Click a heading
+to fold its section; the Todo and Projects headings can open a note instead.
 
 Folders leave the explorer. Nothing is hidden from Obsidian itself: every
 folder and note is still searchable, reachable from the Quick Switcher, and the
-target of every link in the vault. A root note that is also an active project
+target of every link in the vault. A note that is also an active project
 appears once, under Projects.
 
 Works on desktop and on mobile.
@@ -41,13 +48,22 @@ use real tags (`#project/in-progress`, frontmatter or body) instead.
 
 Settings → Folder Drawer:
 
-- **Project tag**: which value lists a note under the heading.
-- **Project property**: the frontmatter list to read it from (default
-  `descriptive`). Empty means the note's tags.
-- **Heading**: the heading's text.
-- **Heading link**: a note the heading opens when clicked, e.g. an index of
-  all your projects. A file name (found anywhere in the vault) or a vault path.
-  Cmd/Ctrl-click opens it in a new tab. Leave it empty for a plain heading.
+- **Project tag**: which value lists a note under Projects.
+- **Project property**: the frontmatter list every value is read from
+  (default `descriptive`). Empty means the note's tags.
+- **Projects heading**, **Todo heading**, **Inbox heading**, **Mind heading**,
+  **Root heading**: each heading's text.
+- **Heading link**, **Todo heading link**: a note the heading opens when
+  clicked. A file name (found anywhere in the vault) or a vault path.
+  Cmd/Ctrl-click opens it in a new tab. Leave it empty for a heading that folds.
+- **Source folder**: the folder whose notes fill Todo, Inbox and Mind. Empty is
+  the vault root.
+- **Inbox values**, **Todo values**: which values put a note in each section.
+- **Move todos** (off by default, since it moves files): a todo note files
+  itself by its **Do date property**: today or earlier into the source folder,
+  later into the **Later folder**. Only notes at the root or in those two
+  folders move. The note open in the active tab waits until you open another,
+  so a new note keeps its selected title.
 
 The explorer's own sort order orders both lists.
 
