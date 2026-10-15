@@ -716,13 +716,12 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.laterViews.add(later);
     later.sortOrder = view.sortOrder;
     this.stages.set(view, { wrap, later });
-    /* open() mounts the explorer's own pane and loads it. Only its list is
-       wanted, so the list moves next to Today's and the pane stays hidden. */
-    later.containerEl.addClass(LATER_CLASS + "-pane");
+    /* open() mounts the explorer's own pane beside Today's list and loads
+       it. The pane stays whole, toolbar hidden: the explorer answers clicks,
+       drags and right-clicks on its rows from the pane, not from the list. */
+    later.containerEl.addClass(LATER_CLASS);
     await later.open(wrap);
     if (this.stages.get(view)?.later !== later) return;
-    later.navFileContainerEl.addClass(LATER_CLASS);
-    wrap.insertBefore(later.navFileContainerEl, later.containerEl);
     later.requestSort();
     wrap.scrollLeft = this.space * wrap.clientWidth;
 
@@ -744,7 +743,6 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     const { wrap, later } = stage;
     this.laterViews.delete(later);
     later.unload();
-    later.navFileContainerEl.remove();
     later.containerEl.remove();
     if (view.navFileContainerEl.parentElement === wrap) wrap.replaceWith(view.navFileContainerEl);
     else wrap.remove();

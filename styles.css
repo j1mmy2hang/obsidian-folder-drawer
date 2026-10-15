@@ -245,18 +245,23 @@ body.is-mobile .folder-drawer-heading {
   display: none;
 }
 
-/* Each list is one pane wide and scrolls up and down on its own. */
-.folder-drawer-spaces-wrap > .nav-files-container {
+/* Each space is one pane wide and scrolls up and down on its own: Today's
+   list, and Later's whole explorer pane with its toolbar hidden. */
+.folder-drawer-spaces-wrap > .nav-files-container,
+.folder-drawer-spaces-wrap > .folder-drawer-later {
   flex: 0 0 100%;
   min-width: 0;
   scroll-snap-align: start;
   scroll-snap-stop: always;
 }
 
-/* Later's explorer pane: only its list is used, and that list lives in the
-   scroller beside Today's. */
-.folder-drawer-later-pane {
-  display: none !important;
+.folder-drawer-later {
+  display: flex;
+  flex-direction: column;
+}
+
+.folder-drawer-later > .nav-header {
+  display: none;
 }
 
 /* The dots: one per space, the filled one showing. Each is a 20px target
