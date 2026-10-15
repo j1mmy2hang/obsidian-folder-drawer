@@ -222,31 +222,41 @@ body.is-mobile .folder-drawer-heading {
 
 /* --- Spaces -----------------------------------------------------------------
 
-   Today and Later sit side by side, Later to the right, and a sideways swipe
-   slides them as one strip. The pane clips the strip, so only one panel's
-   width ever shows. The panel being left is a still copy of the list laid
-   over the list's own box (main.js sets its box); it takes no clicks.
+   Today and Later are two File Explorer lists side by side in one
+   horizontal scroller, Later to the right. Scroll snapping is the whole
+   gesture: the browser follows the fingers, carries the momentum and lands
+   on a list, the way any snapping carousel does. scroll-snap-stop keeps a
+   hard flick from flying past a space; overscroll-behavior keeps a swipe at
+   either end from leaking out to anything around the pane.
    ---------------------------------------------------------------------- */
 
-body.folder-drawer-active .workspace-leaf-content[data-type="file-explorer"] {
-  position: relative;
-  overflow: hidden;
+.folder-drawer-spaces-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
 }
 
-body.folder-drawer-active .workspace-leaf-content[data-type="file-explorer"] .nav-files-container {
-  touch-action: pan-y;
+.folder-drawer-spaces-wrap::-webkit-scrollbar {
+  display: none;
 }
 
-/* Both panels get their own compositor layer while the strip is open, so
-   moving them is a transform and never a layout. */
-.folder-drawer-strip {
-  will-change: transform;
+/* Each list is one pane wide and scrolls up and down on its own. */
+.folder-drawer-spaces-wrap > .nav-files-container {
+  flex: 0 0 100%;
+  min-width: 0;
+  scroll-snap-align: start;
+  scroll-snap-stop: always;
 }
 
-.folder-drawer-ghost {
-  margin: 0;
-  pointer-events: none;
-  overflow: hidden !important;
+/* Later's explorer pane: only its list is used, and that list lives in the
+   scroller beside Today's. */
+.folder-drawer-later-pane {
+  display: none !important;
 }
 
 /* The dots: one per space, the filled one showing. Each is a 20px target

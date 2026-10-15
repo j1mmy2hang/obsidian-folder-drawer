@@ -67,12 +67,17 @@ Settings → Folder Drawer:
 
 - **Spaces** (on by default): the source folder and the **Later folder**
   become two spaces side by side, as in Arc, Later to the right of Today.
-  Swipe sideways over the pane (two fingers on a trackpad, one on a
-  touchscreen) to slide from one to the other; the dots at the bottom of the
-  pane show which is showing and switch on click. Each space fills the same
+  Swipe sideways over the pane to move between them; the dots at the bottom
+  show which is showing and switch on click. Each space fills the same
   headings from its own folder. Projects belong to Today; the root dock stays
   put in both. **Next space** and **Previous space** are commands, for
   hotkeys. Every launch opens on Today.
+
+  Each space is a whole File Explorer (Later's is a second explorer built on
+  the same pane), and the two sit in a horizontal scroller with CSS scroll
+  snapping. The swipe is the browser's own scrolling: it follows the
+  fingers, carries the momentum and lands natively, off the main thread. The
+  plugin runs no code while a swipe is under way.
 
 The explorer's own sort order orders both lists.
 
