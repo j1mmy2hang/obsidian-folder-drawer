@@ -477,7 +477,7 @@ body.is-mobile .folder-drawer-heading {
    element (:last-child counts as a class), so these repeat a class to reach 8. */
 .is-mobile.is-floating-nav.is-phone .workspace-drawer .workspace-leaf-content > .folder-drawer-spaces.folder-drawer-spaces.folder-drawer-spaces {
   padding-top: 0;
-  padding-bottom: 52px;
+  padding-bottom: 40px;
 }
 
 .is-mobile.is-floating-nav.is-phone .workspace-drawer .folder-drawer-spaces-wrap .folder-drawer-spaces-wrap-track .nav-files-container.nav-files-container {
