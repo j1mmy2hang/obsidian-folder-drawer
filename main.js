@@ -795,11 +795,16 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   async mountSpaces(view) {
     const want = this.spaces().length > 1;
-    const stage = this.stages.get(view);
-    if (stage && (!want || !stage.wrap.isConnected)) this.unmountSpaces(view);
+    const mounted = this.stages.get(view);
+    if (mounted && (!want || !mounted.wrap.isConnected)) this.unmountSpaces(view);
     if (!want || this.stages.has(view)) return;
     const list = view.navFileContainerEl;
     if (!list || !list.parentElement) return;
+    /* Anything a previous load left in the pane goes first: the list comes
+       back out of an old scroller, and old dots and Later panes leave. */
+    const stale = view.containerEl.querySelector(":scope > ." + SPACES_WRAP_CLASS);
+    if (stale) stale.replaceWith(list);
+    view.containerEl.querySelectorAll(":scope > ." + SPACES_CLASS).forEach((el) => el.remove());
 
     /* The scroller holds a track two panes wide. The snap points are two
        still markers on the track, not the lists themselves, so anything
@@ -812,6 +817,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     track.appendChild(list);
     const later = new view.constructor(view.leaf);
     this.laterViews.add(later);
+    /* A child of the plugin, so it unloads with the plugin whatever else
+       happens on the way out. */
+    this.addChild(later);
     later.sortOrder = view.sortOrder;
     this.stages.set(view, { wrap, later });
     /* open() mounts the explorer's own pane beside Today's list and loads
@@ -819,8 +827,17 @@ module.exports = class FolderDrawerPlugin extends Plugin {
        drags and right-clicks on its rows from the pane, not from the list. */
     later.containerEl.addClass(LATER_CLASS);
     await later.open(track);
-    if (this.stages.get(view)?.later !== later) return;
+    const stage = this.stages.get(view);
+    if (stage?.later !== later) return;
     later.requestSort();
+    /* Later is no workspace pane, so nothing tells it when it gets a size.
+       Built at no size, as on a phone, where the pane sits in a drawer that
+       starts closed, its first sort lists nothing. So it re-sorts whenever
+       its size changes, which also redraws the rows that now fit. */
+    stage.resizer = new ResizeObserver(() => {
+      if (later.navFileContainerEl.clientHeight) later.requestSort();
+    });
+    stage.resizer.observe(later.navFileContainerEl);
     wrap.scrollLeft = this.space * wrap.clientWidth;
 
     /* Where the scroller is, read only to light the dots. */
@@ -838,9 +855,10 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     const stage = this.stages.get(view);
     if (!stage) return;
     this.stages.delete(view);
-    const { wrap, later } = stage;
+    const { wrap, later, resizer } = stage;
+    resizer?.disconnect();
     this.laterViews.delete(later);
-    later.unload();
+    this.removeChild(later);
     later.containerEl.remove();
     if (wrap.contains(view.navFileContainerEl)) wrap.replaceWith(view.navFileContainerEl);
     else wrap.remove();
