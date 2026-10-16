@@ -1,7 +1,7 @@
 {
   "id": "folder-drawer",
   "name": "Folder Drawer",
-  "version": "2.6.3",
+  "version": "2.6.4",
   "minAppVersion": "1.7.2",
   "description": "The File Explorer splits into Todo, Inbox, Mind and Projects sections, with the vault root docked below, and swipes between a Today and a Later space. Folders leave the explorer.",
   "author": "Jimmy Zhang",
