@@ -238,6 +238,16 @@ body.is-mobile .folder-drawer-heading {
   pointer-events: none;
 }
 
+/* On a phone it takes the place and spacing of Obsidian's own empty panes
+   ("No headings found."): .pane-empty's margin and padding, measured from
+   the top of the list. */
+body.is-mobile .nav-files-container.folder-drawer-empty::before {
+  top: 0;
+  margin: var(--size-4-2) 0;
+  padding: var(--size-4-6) var(--size-4-4);
+  line-height: normal;
+}
+
 /* --- Spaces -----------------------------------------------------------------
 
    Today and Later are two File Explorer lists side by side in one
