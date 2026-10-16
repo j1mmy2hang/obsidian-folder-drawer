@@ -82,7 +82,7 @@ const SPACES_CLASS = "folder-drawer-spaces";
 const FOLD_MS = 260;
 /* Today's list when nothing is left in it, and what it says then. */
 const EMPTY_CLASS = "folder-drawer-empty";
-const EMPTY_TEXT = "Congrats. All clear for today.";
+const EMPTY_TEXT = "Congrats.\nAll clear for today.";
 /* The horizontal scroller that holds the spaces, and Later's list in it. */
 const SPACES_WRAP_CLASS = "folder-drawer-spaces-wrap";
 const LATER_CLASS = "folder-drawer-later";
