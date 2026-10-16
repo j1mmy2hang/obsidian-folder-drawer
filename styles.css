@@ -221,16 +221,16 @@ body.is-mobile .folder-drawer-heading {
 }
 
 /* --- All clear -------------------------------------------------------------
-   Today with nothing left in it says so, small and faint, where its first
-   row would be: on the note-title column, first line centred on the first
-   row's line. Drawn by the list itself, so it adds no row and no height. */
+   Today with nothing left in it says so, small and faint, centred across
+   the pane on the line its first row would take. Drawn by the list itself, so it adds no row and no height. */
 
 .nav-files-container.folder-drawer-empty::before {
   content: attr(data-empty-text);
   position: absolute;
   top: calc(4px + var(--folder-drawer-row) / 2 - 0.875em);
-  left: var(--sidebar-text-left, 24px);
-  right: 8px;
+  left: 0;
+  right: 0;
+  text-align: center;
   white-space: pre-line;
   line-height: 1.75;
   font-size: var(--font-ui-small);
