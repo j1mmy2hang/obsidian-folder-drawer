@@ -228,11 +228,11 @@ body.is-mobile .folder-drawer-heading {
 .nav-files-container.folder-drawer-empty::before {
   content: attr(data-empty-text);
   position: absolute;
-  top: calc(4px + var(--folder-drawer-row) / 2 - 0.65em);
+  top: calc(4px + var(--folder-drawer-row) / 2 - 0.875em);
   left: var(--sidebar-text-left, 24px);
   right: 8px;
   white-space: pre-line;
-  line-height: 1.3;
+  line-height: 1.75;
   font-size: var(--font-ui-small);
   color: var(--text-faint);
   pointer-events: none;
