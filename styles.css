@@ -473,8 +473,9 @@ body.is-mobile .folder-drawer-heading {
    list can scroll clear of the floating tab switcher at the bottom
    (.nav-header ~ div:last-child). With spaces on, the dots are last: they
    take just enough of that to sit above the switcher, and both lists get
-   back the spacing the rule gave them. Classes doubled to outrank it. */
-.is-mobile.is-floating-nav.is-phone .workspace-drawer .workspace-leaf-content > .folder-drawer-spaces.folder-drawer-spaces {
+   back the spacing the rule gave them. Its selector counts 7 classes and an
+   element (:last-child counts as a class), so these repeat a class to reach 8. */
+.is-mobile.is-floating-nav.is-phone .workspace-drawer .workspace-leaf-content > .folder-drawer-spaces.folder-drawer-spaces.folder-drawer-spaces {
   padding-top: 0;
   padding-bottom: 52px;
 }
