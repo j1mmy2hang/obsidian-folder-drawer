@@ -21,6 +21,9 @@
  * earlier into the source folder, later into the later folder. Only notes
  * at the root or already in one of those two are moved, so an archived todo
  * stays archived. The note open in the active tab moves once another opens.
+ * A todo that arrives in the source folder, moved or dragged there, gets
+ * today as its do date; one dragged from it to the later folder without a
+ * future date gets this Sunday.
  *
  * Spaces, as in Arc: the source folder is Today, the later folder is Later,
  * two lists side by side, and a sideways swipe moves from one to the other.
@@ -201,11 +204,21 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       }
       rescan();
     };
-    this.registerEvent(this.app.metadataCache.on("changed", now));
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        if (this.dating?.get(file) === "written") this.dating.delete(file);
+        now(file);
+      })
+    );
     this.registerEvent(this.app.metadataCache.on("resolved", rescan));
     this.registerEvent(this.app.vault.on("create", now));
     this.registerEvent(this.app.vault.on("delete", now));
-    this.registerEvent(this.app.vault.on("rename", now));
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        this.arrive(file, oldPath);
+        now(file);
+      })
+    );
 
     /* The heading lights up while its note is the one open, as a row does. */
     this.registerEvent(
@@ -501,10 +514,75 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   /* --- filing todos by do date -------------------------------------------- */
 
+  /* A note's do date as YYYY-MM-DD, or a string after every date when it
+     has none, so undated todos sort last. */
+  doDate(file) {
+    const date = String(this.app.metadataCache.getFileCache(file)?.frontmatter?.[this.settings.doDateProperty] ?? "").trim();
+    return /^\d{4}-\d{2}-\d{2}/.test(date) ? date.slice(0, 10) : "~";
+  }
+
   folderAt(path) {
     const clean = (path || "").trim().replace(/^\/+|\/+$/g, "");
     const folder = clean && this.app.vault.getAbstractFileByPath(clean);
     return folder instanceof TFolder ? folder : null;
+  }
+
+  isTodo(meta) {
+    if (!meta || !meta.frontmatter) return false;
+    const todoWant = new Set(this.settings.todoValues.map(normalize).filter(Boolean));
+    const key = this.settings.projectProperty.trim();
+    return (key ? [].concat(meta.frontmatter[key] ?? []) : getAllTags(meta) || [])
+      .filter((v) => typeof v === "string")
+      .map(normalize)
+      .some((v) => todoWant.has(v));
+  }
+
+  /* A todo moved by hand gets a do date that keeps it where it was put:
+     - arriving in the source folder from anywhere else, it is due today;
+     - moved from the source folder to the later folder with a date that is
+       not in the future, it is due this Sunday (next Sunday on a Sunday).
+     A time after the date is kept. Without this, placeTodos would send the
+     note straight back; until the new date is in the metadata cache it
+     leaves the note alone. A todo filed by placeTodos itself already has a
+     date that fits, so nothing is written. */
+  arrive(file, oldPath) {
+    if (!this.settings.moveTodos || !(file instanceof TFile) || file.extension !== "md") return;
+    const now = this.folderAt(this.settings.sourceFolder);
+    const later = this.folderAt(this.settings.laterFolder);
+    if (!now || !later) return;
+    const from = oldPath.includes("/") ? oldPath.slice(0, oldPath.lastIndexOf("/")) : "";
+    const meta = this.app.metadataCache.getFileCache(file);
+    if (!this.isTodo(meta)) return;
+    const prop = this.settings.doDateProperty;
+    const today = moment().format("YYYY-MM-DD");
+    const current = String(meta.frontmatter[prop] ?? "").trim().slice(0, 10);
+    let day;
+    if (file.parent === now && from !== now.path) {
+      if (current === today) return;
+      day = today;
+    } else if (file.parent === later && from === now.path) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(current) && current > today) return;
+      day = moment().day(7).format("YYYY-MM-DD");
+    } else {
+      return;
+    }
+    this.dating = this.dating || new Map();
+    this.dating.set(file, "writing");
+    this.app.fileManager
+      .processFrontMatter(file, (fm) => {
+        const old = String(fm[prop] ?? "").trim();
+        fm[prop] = /^\d{4}-\d{2}-\d{2}(?![\d])/.test(old) ? day + old.slice(10) : day;
+      })
+      .then(
+        () => {
+          this.dating.set(file, "written");
+          window.setTimeout(() => this.dating.delete(file), 5000);
+        },
+        (e) => {
+          this.dating.delete(file);
+          console.error("Folder Drawer: could not date", file.path, e);
+        }
+      );
   }
 
   /* Each todo at the root, in the source folder or in the later folder goes
@@ -517,8 +595,6 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     const later = this.folderAt(this.settings.laterFolder);
     if (!now || !later) return false;
     const root = this.app.vault.getRoot();
-    const todoWant = new Set(this.settings.todoValues.map(normalize).filter(Boolean));
-    const key = this.settings.projectProperty.trim();
     const cache = this.app.metadataCache;
     /* note → the path it is moving to */
     this.moving = this.moving || new Map();
@@ -530,13 +606,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     for (const file of only ? [only] : this.app.vault.getMarkdownFiles()) {
       if (file.extension !== "md") continue;
       if (file.parent !== root && file.parent !== now && file.parent !== later) continue;
-      if (file === active || this.moving.has(file)) continue;
+      if (file === active || this.moving.has(file) || this.dating?.has(file)) continue;
       const meta = cache.getFileCache(file);
-      if (!meta || !meta.frontmatter) continue;
-      const values = (key ? [].concat(meta.frontmatter[key] ?? []) : getAllTags(meta) || [])
-        .filter((v) => typeof v === "string")
-        .map(normalize);
-      if (!values.some((v) => todoWant.has(v))) continue;
+      if (!this.isTodo(meta)) continue;
       const date = String(meta.frontmatter[this.settings.doDateProperty] ?? "").trim();
       if (!/^\d{4}-\d{2}-\d{2}(?![\d])/.test(date)) continue;
       const target = date.slice(0, 10) <= this.day ? now : later;
@@ -620,6 +692,14 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       const todoItems = loose.filter((item) => todo.has(item.file));
       const mind = loose.filter((item) => !inbox.has(item.file) && !todo.has(item.file));
       const inboxItems = loose.filter((item) => inbox.has(item.file));
+      /* Later is what is coming: its todos by do date, soonest first, and
+         its other notes newest first, whatever the explorer's own order. */
+      if (space) {
+        const byItem = (cmp) => (a, b) => cmp(a.file, b.file);
+        todoItems.sort(byItem((a, b) => plugin.doDate(a).localeCompare(plugin.doDate(b)) || COMPARE.alphabetical(a, b)));
+        mind.sort(byItem(COMPARE.byCreatedTime));
+        inboxItems.sort(byItem(COMPARE.byCreatedTime));
+      }
       const compare = COMPARE[this.sortOrder] || COMPARE.alphabetical;
       /* Projects are what is in progress now: they belong to Today. */
       const borrowed = (space ? [] : [...projects])

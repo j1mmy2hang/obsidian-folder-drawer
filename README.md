@@ -63,7 +63,10 @@ Settings → Folder Drawer:
   itself by its **Do date property**: today or earlier into the source folder,
   later into the **Later folder**. Only notes at the root or in those two
   folders move. The note open in the active tab waits until you open another,
-  so a new note keeps its selected title.
+  so a new note keeps its selected title. A todo that arrives in the source
+  folder, filed there or dragged there, gets today as its do date. One dragged
+  from the source folder to the later folder without a future do date gets
+  this Sunday (next Sunday, on a Sunday).
 
 - **Spaces** (on by default): the source folder and the **Later folder**
   become two spaces side by side, as in Arc, Later to the right of Today.
