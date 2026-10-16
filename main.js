@@ -80,6 +80,9 @@ const DOCK_CLASS = "folder-drawer-dock";
 /* The dots at the bottom of the pane, one per space. */
 const SPACES_CLASS = "folder-drawer-spaces";
 const FOLD_MS = 260;
+/* Today's list when nothing is left in it, and what it says then. */
+const EMPTY_CLASS = "folder-drawer-empty";
+const EMPTY_TEXT = "Congrats. All clear for today.";
 /* The horizontal scroller that holds the spaces, and Later's list in it. */
 const SPACES_WRAP_CLASS = "folder-drawer-spaces-wrap";
 const LATER_CLASS = "folder-drawer-later";
@@ -237,6 +240,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     document.querySelectorAll("." + HEADING_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + DOCK_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + SPACES_CLASS).forEach((el) => el.remove());
+    document.querySelectorAll("." + EMPTY_CLASS).forEach((el) => el.removeClass(EMPTY_CLASS));
     document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS, FOLDED_CLASS));
     for (const view of [...this.stages.keys()]) this.unmountSpaces(view);
     this.space = 0;
@@ -725,7 +729,15 @@ module.exports = class FolderDrawerPlugin extends Plugin {
          virtualiser never builds or measures the rest. */
       const shown = (section, list) =>
         plugin.isCollapsed(section) ? (firsts[section] ? [firsts[section]] : []) : list;
-      return shown("todo", todoItems).concat(shown("inbox", inboxItems), shown("mind", mind), shown("projects", borrowed));
+      const list = shown("todo", todoItems).concat(shown("inbox", inboxItems), shown("mind", mind), shown("projects", borrowed));
+      /* Today with nothing left says so. A pseudo-element on the list, since
+         the virtualiser removes any element of the list it did not make. */
+      if (!space) {
+        const empty = !list.some((item) => item.el && item.el.style.display !== "none");
+        this.navFileContainerEl?.toggleClass(EMPTY_CLASS, empty);
+        this.navFileContainerEl?.setAttr("data-empty-text", EMPTY_TEXT);
+      }
+      return list;
     };
 
     proto.getSortedFolderItems = this.wrapper;

@@ -220,6 +220,23 @@ body.is-mobile .folder-drawer-heading {
   padding-inline-start: 12px;
 }
 
+/* --- All clear -------------------------------------------------------------
+   Today with nothing left in it says so, small and faint, in the pane's
+   upper third. Drawn by the list itself, so it adds no row and no height. */
+
+.nav-files-container.folder-drawer-empty::before {
+  content: attr(data-empty-text);
+  position: absolute;
+  top: 33%;
+  left: 0;
+  right: 0;
+  padding: 0 24px;
+  text-align: center;
+  font-size: var(--font-ui-small);
+  color: var(--text-faint);
+  pointer-events: none;
+}
+
 /* --- Spaces -----------------------------------------------------------------
 
    Today and Later are two File Explorer lists side by side in one
