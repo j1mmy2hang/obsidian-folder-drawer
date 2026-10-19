@@ -286,16 +286,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
      rows below start where they were and slide down, and the section fades
      in behind them. The virtualiser's cached heights are dropped at the end. */
   async toggleSection(section) {
-    /* The dock is outside the virtualised list: nothing to slide past. */
-    if (section === "root") {
-      this.settings.collapsed = this.isCollapsed(section)
-        ? this.settings.collapsed.filter((s) => s !== section)
-        : this.settings.collapsed.concat(section);
-      this.saveData(this.settings);
-      this.renderDocks();
-      return;
-    }
     if (this.folding) return;
+    /* The dock is outside the virtualised list: nothing to slide past. */
+    if (section === "root") return this.toggleDock();
     this.folding = true;
     const closing = !this.isCollapsed(section);
     const motion = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -322,6 +315,76 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       for (const view of this.explorerViews()) view.tree?.infinityScroll?.invalidateAll?.();
       this.folding = false;
     }
+  }
+
+  /* The dock folds as a section does, toward the pane's bottom edge. Its
+     heading and list slide as one, clipped by the dock, and the list fades.
+     Closing: they sink until the heading reaches the place the shut dock
+     gives it, then the redraw lands it there. Opening: the redraw comes
+     first, and they rise from where the heading was. */
+  async toggleDock() {
+    this.folding = true;
+    const closing = !this.isCollapsed("root");
+    const motion = this.motion();
+    const docks = this.paneViews()
+      .map((view) => this.docks.get(view))
+      .filter((dock) => dock?.isConnected);
+    for (const dock of docks) dock.querySelector(":scope > ." + HEADING_CLASS)?.toggleClass("is-collapsed", closing);
+    try {
+      if (closing && motion) {
+        await this.slideDocks(docks, (dock, heading) => {
+          const box = dock.getBoundingClientRect();
+          const pad = parseFloat(getComputedStyle(dock).paddingBottom) || 0;
+          return box.bottom - pad - heading.offsetHeight - heading.getBoundingClientRect().top;
+        }, false);
+      }
+      const before = new Map(docks.map((dock) => [dock, dock.querySelector(":scope > ." + HEADING_CLASS)?.getBoundingClientRect().top]));
+      this.settings.collapsed = closing
+        ? this.settings.collapsed.concat("root")
+        : this.settings.collapsed.filter((s) => s !== "root");
+      this.saveData(this.settings);
+      this.renderDocks();
+      if (!closing && motion) {
+        await this.slideDocks(docks, (dock, heading) => (before.get(dock) ?? 0) - heading.getBoundingClientRect().top, true);
+      }
+    } finally {
+      this.clearFold();
+      this.folding = false;
+    }
+  }
+
+  /* offset(dock, heading) is how far below its resting place the content
+     is shut. */
+  async slideDocks(docks, offset, opening) {
+    const animations = [];
+    for (const dock of docks) {
+      if (!dock.isConnected) continue;
+      const heading = dock.querySelector(":scope > ." + HEADING_CLASS);
+      const list = dock.querySelector(":scope > ." + DOCK_CLASS + "-list");
+      if (!heading || !list) continue;
+      /* Clipped first: leaving overflow auto resets the dock's scroll. */
+      dock.classList.add(FOLDING_CLASS);
+      const shut = `translateY(${offset(dock, heading)}px)`;
+      for (const el of [heading, list]) {
+        animations.push(
+          el.animate(opening ? [{ transform: shut }, { transform: "none" }] : [{ transform: "none" }, { transform: shut }], {
+            duration: FOLD_MS,
+            easing: FOLD_EASING,
+            fill: "both",
+          })
+        );
+      }
+      animations.push(
+        list.animate(
+          opening
+            ? [{ opacity: 0 }, { opacity: 0, offset: 0.25 }, { opacity: 1 }]
+            : [{ opacity: 1 }, { opacity: 0, offset: 0.6 }, { opacity: 0 }],
+          { duration: FOLD_MS, easing: "linear", fill: "both" }
+        )
+      );
+    }
+    this.foldAnimations = (this.foldAnimations || []).concat(animations);
+    await Promise.all(animations.map((a) => a.finished.catch(() => {})));
   }
 
   sortNow() {

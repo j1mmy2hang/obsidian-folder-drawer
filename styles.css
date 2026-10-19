@@ -216,6 +216,13 @@ body.is-mobile .folder-drawer-heading {
   margin-bottom: 5px;
 }
 
+/* Mid-fold its content slides past its edges: clip it there, and keep the
+   slide from growing a scrollbar. */
+.folder-drawer-dock.folder-drawer-folding {
+  overflow: clip;
+  will-change: auto;
+}
+
 .folder-drawer-dock.is-collapsed .folder-drawer-heading {
   margin-bottom: 0;
 }
