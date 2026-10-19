@@ -994,22 +994,30 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   }
 
   /* How full Later is: its notes against LATER_CAPACITY, as text over a
-     thin bar, green to red as it fills, at the top of Later.
-     Drawn by the list itself (styles.css), since the virtualiser removes
-     any element of the list it did not make. */
+     thin bar, green to red as it fills. It sits in Later's pane above the
+     list, never inside it, since the virtualiser owns the list's children. */
   renderMeter(later) {
     if (!this._loaded) return;
     const list = later.navFileContainerEl;
     const folder = this.folderAt(this.settings.laterFolder);
-    if (!list || !folder) return;
+    if (!list?.parentElement || !folder) return;
+    let meter = later.containerEl.querySelector(":scope > ." + METER_CLASS);
+    if (!meter) {
+      meter = createDiv({ cls: METER_CLASS });
+      meter.createDiv({ cls: METER_CLASS + "-text" });
+      meter.createDiv({ cls: METER_CLASS + "-bar" }).createDiv({ cls: METER_CLASS + "-fill" });
+    }
+    if (meter.nextElementSibling !== list) list.before(meter);
     let count = 0;
     const walk = (f) => f.children.forEach((c) => (c instanceof TFolder ? walk(c) : c.extension === "md" && count++));
     walk(folder);
     const pct = Math.round((count / LATER_CAPACITY) * 100);
-    list.addClass(METER_CLASS);
-    list.setAttr("data-meter", pct + "% full");
-    list.setAttr("data-meter-level", pct >= 100 ? "full" : pct >= 75 ? "high" : pct >= 50 ? "mid" : "low");
-    list.style.setProperty("--folder-drawer-meter", String(Math.min(pct, 100) / 100));
+    const level = pct >= 100 ? "full" : pct >= 75 ? "high" : pct >= 50 ? "mid" : "low";
+    if (meter.dataset.key === pct + level) return;
+    meter.dataset.key = pct + level;
+    meter.dataset.level = level;
+    meter.firstElementChild.setText(pct + "% full");
+    meter.querySelector("." + METER_CLASS + "-fill").style.width = Math.min(pct, 100) + "%";
   }
 
   unmountSpaces(view) {

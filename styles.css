@@ -561,37 +561,35 @@ body.is-mobile .nav-files-container.folder-drawer-empty::before {
 }
 
 /* --- Later's meter ----------------------------------------------------------
-   How full Later is, at the top of its pane: small faint text over a
-   thin bar, lined up with the row titles. Green, yellow, orange, then red
-   at full. Drawn by the list as its first box, so it scrolls with the notes
-   and the virtualiser never sees it. The bar is two background layers, the
-   fill sized by --folder-drawer-meter (0 to 1). */
+   How full Later is, above its list: small faint text over a thin bar,
+   lined up with the row titles. Green, yellow, orange, then red at full.
+   ---------------------------------------------------------------------- */
 
-@property --folder-drawer-meter {
-  syntax: "<number>";
-  inherits: true;
-  initial-value: 0;
+.folder-drawer-meter {
+  flex: none;
+  padding: 8px var(--sidebar-row-bleed, 24px) 20px var(--sidebar-text-left, 36px);
 }
 
-.nav-files-container.folder-drawer-meter::before {
-  --folder-drawer-meter-color: var(--color-green);
-  --folder-drawer-meter-inset: var(--sidebar-row-bleed, 24px);
-  content: attr(data-meter);
-  display: block;
-  margin: 4px 0 24px;
-  padding: 0 var(--folder-drawer-meter-inset) 7px;
+.folder-drawer-meter-text {
   font-size: var(--font-ui-smaller);
-  line-height: 1.4;
   color: var(--text-faint);
-  background:
-    linear-gradient(var(--folder-drawer-meter-color), var(--folder-drawer-meter-color))
-      left var(--folder-drawer-meter-inset) bottom 0 / calc((100% - 2 * var(--folder-drawer-meter-inset)) * var(--folder-drawer-meter)) 3px no-repeat,
-    linear-gradient(var(--background-modifier-border), var(--background-modifier-border))
-      left var(--folder-drawer-meter-inset) bottom 0 / calc(100% - 2 * var(--folder-drawer-meter-inset)) 3px no-repeat;
-  transition: --folder-drawer-meter 260ms cubic-bezier(0.2, 0, 0, 1);
-  pointer-events: none;
+  margin-bottom: 4px;
 }
 
-.nav-files-container.folder-drawer-meter[data-meter-level="mid"]::before { --folder-drawer-meter-color: var(--color-yellow); }
-.nav-files-container.folder-drawer-meter[data-meter-level="high"]::before { --folder-drawer-meter-color: var(--color-orange); }
-.nav-files-container.folder-drawer-meter[data-meter-level="full"]::before { --folder-drawer-meter-color: var(--color-red); }
+.folder-drawer-meter-bar {
+  height: 3px;
+  border-radius: 3px;
+  background: var(--background-modifier-border);
+  overflow: hidden;
+}
+
+.folder-drawer-meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-green);
+  transition: width 260ms cubic-bezier(0.2, 0, 0, 1), background-color 260ms;
+}
+
+.folder-drawer-meter[data-level="mid"] .folder-drawer-meter-fill { background: var(--color-yellow); }
+.folder-drawer-meter[data-level="high"] .folder-drawer-meter-fill { background: var(--color-orange); }
+.folder-drawer-meter[data-level="full"] .folder-drawer-meter-fill { background: var(--color-red); }
