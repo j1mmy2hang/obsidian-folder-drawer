@@ -17,13 +17,15 @@
  *               another one: what just landed, not yet moved anywhere. Not in
  *               the list: a dock pinned under it, at the bottom of the pane
  *
- * With Move todos on, a todo note files itself by its do date: today or
- * earlier into the source folder, later into the later folder. Only notes
- * at the root or already in one of those two are moved, so an archived todo
- * stays archived. The note open in the active tab moves once another opens.
- * A todo that arrives in the source folder, moved or dragged there, gets
- * today as its do date; one dragged from it to the later folder without a
- * future date gets this Sunday.
+ * With Move todos on, a todo note at the root, in the source folder or in
+ * the later folder files itself by its do date: today or earlier into the
+ * source folder, later into the later folder; without a date, to the root,
+ * where an undated new one waits. A todo anywhere else stays where it is,
+ * so an archived todo stays archived. The note open in the active
+ * tab moves once another opens. A todo moved into the source folder gets
+ * today as its do date; one moved into the later folder without a future
+ * date gets this Sunday; one moved from either back to the root loses its
+ * do date.
  *
  * Spaces, as in Arc: the source folder is Today, the later folder is Later,
  * two lists side by side, and a sideways swipe moves from one to the other.
@@ -77,6 +79,8 @@ const FOLDED_CLASS = "folder-drawer-folded";
 const FOLDING_CLASS = "folder-drawer-folding";
 /* The root section's own panel, below the scrolling list. */
 const DOCK_CLASS = "folder-drawer-dock";
+/* Copies of rows that just left, fading where they were. */
+const GHOSTS_CLASS = "folder-drawer-ghosts";
 /* The dots at the bottom of the pane, one per space. */
 const SPACES_CLASS = "folder-drawer-spaces";
 const FOLD_MS = 260;
@@ -158,6 +162,13 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.bySpace = [];
     /* view → its dock element, and the dock's last-drawn contents. */
     this.docks = new WeakMap();
+    /* view → the elements of every item its list holds. */
+    this.listed = new WeakMap();
+    /* view → whether its dock was drawn yet, a dock fading out, and the
+       dock's running animations. */
+    this.dockSeen = new WeakSet();
+    this.leavingDocks = new WeakMap();
+    this.dockGlides = new WeakMap();
     /* The space showing: 0 is Today. Every launch starts there. */
     this.space = 0;
     /* explorer view → its spaces: the scroller and Later's own explorer. */
@@ -193,7 +204,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     /* Tagging a note or taking the tag off is a metadata change, not a vault
        one, so the explorer would never re-sort by itself. Only re-sort when
        the set of projects actually changed. */
-    const rescan = debounce(() => this.rescan(), 200, true);
+    const rescan = (this.rescanLater = debounce(() => this.rescan(), 200, true));
     /* The explorer sorts a frame after a file event, and a note sorted by
        stale lists shows up in the wrong section first, then jumps. So the
        note itself is placed at once; the debounced rescan only confirms. */
@@ -235,11 +246,16 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   }
 
   onunload() {
+    /* Timers, frames and file moves started before unloading still call back
+       afterwards; each entry point checks _loaded, or a dock or dots drawn
+       by the old copy would outlive it next to the new copy's. */
+    this.rescanLater?.cancel();
     document.body.classList.remove(ACTIVE_CLASS);
     this.clearFold();
     document.querySelectorAll("." + HEADING_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + DOCK_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + SPACES_CLASS).forEach((el) => el.remove());
+    document.querySelectorAll("." + GHOSTS_CLASS).forEach((el) => el.remove());
     document.querySelectorAll("." + EMPTY_CLASS).forEach((el) => el.removeClass(EMPTY_CLASS));
     document.querySelectorAll("." + SEAM_CLASS).forEach((el) => el.classList.remove(SEAM_CLASS, TOP_SEAM_CLASS, FOLDED_CLASS));
     for (const view of [...this.stages.keys()]) this.unmountSpaces(view);
@@ -384,54 +400,100 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   /* Rows glide to where a sort put them instead of jumping there. The root
      sort notes where every row is before the explorer redraws; in the frame
-     the redraw lands, each row that moved starts from its old place and
-     slides home, and a new one fades in. Old places are measured with any
-     glide still running, so a sort mid-glide carries on from where the rows
-     are. */
+     the redraw lands, the rows move as shift() moves them. A row that is
+     merely scrolled out of the drawn window is not gone, only undrawn, so
+     only rows the list no longer holds fade out. Old places are measured
+     with any glide still running, so a sort mid-glide carries on from where
+     the rows are. */
   glide(view) {
-    if (this.folding || this.glideFrame?.has(view)) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const before = this.rowTops(view);
+    if (!this._loaded) return;
+    if (this.folding || this.glideFrame?.has(view) || !this.motion()) return;
+    const host = view.navFileContainerEl;
+    if (!host) return;
+    const before = this.rowRects(host);
     if (!before.size) return;
     this.glideFrame = this.glideFrame || new Set();
     this.glideFrame.add(view);
     requestAnimationFrame(() => {
       this.glideFrame.delete(view);
-      if (this.folding) return;
-      for (const a of this.glides || []) a.cancel();
-      const after = this.rowTops(view);
-      const animations = [];
-      for (const [path, { el, top }] of after) {
-        const was = before.get(path);
-        if (!was) {
-          animations.push(el.animate([{ opacity: 0 }, { opacity: 1 }], { duration: FOLD_MS, easing: "linear" }));
-        } else if (Math.abs(was.top - top) > 0.5) {
-          animations.push(
-            el.animate([{ transform: `translateY(${was.top - top}px)` }, { transform: "none" }], {
-              duration: FOLD_MS,
-              easing: FOLD_EASING,
-            })
-          );
-        }
-      }
-      this.glides = animations;
+      if (this.folding || !this._loaded) return;
+      for (const a of this.glides?.get(view) || []) a.cancel();
+      const after = this.rowRects(host);
+      const listed = this.listed.get(view) || new Set();
+      const gone = [...before].filter(([el]) => !after.has(el) && !listed.has(el)).map(([, row]) => row);
+      const animations = this.shift(before, after, gone, host);
+      this.glides = this.glides || new WeakMap();
+      this.glides.set(view, animations);
       if (!animations.length) return;
       /* The virtualiser measures rows; let it measure them at rest. */
-      Promise.all(animations.map((a) => a.finished)).then(
-        () => view.tree?.infinityScroll?.invalidateAll?.(),
-        () => {}
-      );
+      Promise.allSettled(animations.map((a) => a.finished)).then(() => view.tree?.infinityScroll?.invalidateAll?.());
     });
   }
 
-  /* Each drawn note row's top, by path. */
-  rowTops(view) {
-    const tops = new Map();
-    (view.navFileContainerEl || view.containerEl).querySelectorAll(".tree-item.nav-file").forEach((el) => {
-      const path = el.querySelector(":scope > .nav-file-title")?.dataset.path;
-      if (path && el.offsetParent) tops.set(path, { el, top: el.getBoundingClientRect().top });
+  motion() {
+    return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  }
+
+  /* Each drawn note row in the list, by element (a note keeps its row when
+     it is renamed or moved), with where it is. */
+  rowRects(host) {
+    const rows = new Map();
+    host.querySelectorAll(".tree-item.nav-file").forEach((el) => {
+      if (el.offsetParent && !el.closest("." + GHOSTS_CLASS)) rows.set(el, { el, rect: el.getBoundingClientRect() });
     });
-    return tops;
+    return rows;
+  }
+
+  /* The one motion for rows that come, go or move, timed like a fold. A row
+     that moved slides from where it was. A new one fades in behind the rows
+     making room for it, as an opening section does. One that left is copied
+     where it was and the copy fades as the rows below slide up over its
+     place, as a closing section does. before and after map a key to
+     { el, rect }; host is a positioned element the copies are laid in. */
+  shift(before, after, gone, host) {
+    const animations = [];
+    for (const [key, { el, rect }] of after) {
+      const was = before.get(key);
+      if (!was) {
+        animations.push(
+          el.animate([{ opacity: 0 }, { opacity: 0, offset: 0.25 }, { opacity: 1 }], { duration: FOLD_MS, easing: "linear" })
+        );
+      } else if (Math.abs(was.rect.top - rect.top) > 0.5) {
+        animations.push(
+          el.animate([{ transform: `translateY(${was.rect.top - rect.top}px)` }, { transform: "none" }], {
+            duration: FOLD_MS,
+            easing: FOLD_EASING,
+          })
+        );
+      }
+    }
+    if (gone.length) {
+      const box = host.getBoundingClientRect();
+      const layer = createDiv({ cls: GHOSTS_CLASS });
+      host.prepend(layer);
+      const fades = gone.map(({ el, rect }) => {
+        const copy = el.cloneNode(true);
+        copy.removeAttribute("id");
+        Object.assign(copy.style, {
+          position: "absolute",
+          top: `${rect.top - box.top + host.scrollTop}px`,
+          left: `${rect.left - box.left + host.scrollLeft}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+          margin: "0",
+          transform: "none",
+        });
+        layer.appendChild(copy);
+        return copy.animate([{ opacity: 1 }, { opacity: 0, offset: 0.6 }, { opacity: 0 }], {
+          duration: FOLD_MS,
+          easing: "linear",
+          fill: "forwards",
+        });
+      });
+      Promise.allSettled(fades.map((a) => a.finished)).then(() => layer.remove());
+      animations.push(...fades);
+    }
+    return animations;
   }
 
   clearFold() {
@@ -507,6 +569,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   }
 
   rescan(force = false) {
+    if (!this._loaded) return;
     const same = (a, b) => a.size === b.size && [...b].every((f) => a.has(f));
     const before = this.allSets();
     this.scan();
@@ -543,8 +606,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
 
   /* A todo moved by hand gets a do date that keeps it where it was put:
      - arriving in the source folder from anywhere else, it is due today;
-     - moved from the source folder to the later folder with a date that is
-       not in the future, it is due this Sunday (next Sunday on a Sunday).
+     - arriving in the later folder from anywhere else with a date that is
+       not in the future, it is due this Sunday (next Sunday on a Sunday);
+     - moved from either of them back to the vault root, it has no do date.
      A time after the date is kept. Without this, placeTodos would send the
      note straight back; until the new date is in the metadata cache it
      leaves the note alone. A todo filed by placeTodos itself already has a
@@ -564,9 +628,12 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     if (file.parent === now && from !== now.path) {
       if (current === today) return;
       day = today;
-    } else if (file.parent === later && from === now.path) {
+    } else if (file.parent === later && from !== later.path) {
       if (/^\d{4}-\d{2}-\d{2}$/.test(current) && current > today) return;
       day = moment().day(7).format("YYYY-MM-DD");
+    } else if (file.parent?.isRoot() && (from === now.path || from === later.path)) {
+      if (!current) return;
+      day = null;
     } else {
       return;
     }
@@ -575,7 +642,8 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.app.fileManager
       .processFrontMatter(file, (fm) => {
         const old = String(fm[prop] ?? "").trim();
-        fm[prop] = /^\d{4}-\d{2}-\d{2}(?![\d])/.test(old) ? day + old.slice(10) : day;
+        if (day === null) fm[prop] = null;
+        else fm[prop] = /^\d{4}-\d{2}-\d{2}(?![\d])/.test(old) ? day + old.slice(10) : day;
       })
       .then(
         () => {
@@ -590,9 +658,10 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   }
 
   /* Each todo at the root, in the source folder or in the later folder goes
-     where its do date says. A note without a full date (or with a template's
+     where its do date says, and one with no date goes back to the root. A note without a full date (or with a template's
      placeholder) stays put, and so does one whose name is taken there. */
   placeTodos(only) {
+    if (!this._loaded) return false;
     this.day = moment().format("YYYY-MM-DD");
     if (!this.settings.moveTodos) return false;
     const now = this.folderAt(this.settings.sourceFolder);
@@ -614,10 +683,13 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       const meta = cache.getFileCache(file);
       if (!this.isTodo(meta)) continue;
       const date = String(meta.frontmatter[this.settings.doDateProperty] ?? "").trim();
-      if (!/^\d{4}-\d{2}-\d{2}(?![\d])/.test(date)) continue;
-      const target = date.slice(0, 10) <= this.day ? now : later;
+      let target;
+      /* A todo whose date was cleared is no longer scheduled: back to the root. */
+      if (!date) target = root;
+      else if (/^\d{4}-\d{2}-\d{2}(?![\d])/.test(date)) target = date.slice(0, 10) <= this.day ? now : later;
+      else continue;
       if (file.parent === target) continue;
-      const path = normalizePath(target.path + "/" + file.name);
+      const path = target.isRoot() ? file.name : normalizePath(target.path + "/" + file.name);
       if (this.app.vault.getAbstractFileByPath(path)) continue;
       this.moving.set(file, path);
       started = true;
@@ -730,6 +802,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       const shown = (section, list) =>
         plugin.isCollapsed(section) ? (firsts[section] ? [firsts[section]] : []) : list;
       const list = shown("todo", todoItems).concat(shown("inbox", inboxItems), shown("mind", mind), shown("projects", borrowed));
+      /* What the list holds, drawn or not, so a glide can tell a row that
+         left from one only scrolled out of the drawn window. */
+      plugin.listed.set(this, new Set(list.map((item) => item.el).filter(Boolean)));
       /* Today with nothing left says so. A pseudo-element on the list, since
          the virtualiser removes any element of the list it did not make. */
       if (!space) {
@@ -904,6 +979,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   /* One dot per space at the very bottom of the pane; the filled one is
      showing. A dot is also a button to its space. */
   renderSpaces(view) {
+    if (!this._loaded) return;
     const spaces = this.spaces();
     let dots = this.spaceDots.get(view);
     if (spaces.length < 2 || !this.stages.has(view)) {
@@ -955,12 +1031,32 @@ module.exports = class FolderDrawerPlugin extends Plugin {
      whatever the list's length. Its rows are the plugin's own, not the
      virtualiser's, built with the explorer's classes so they look the same. */
   renderDock(view) {
+    if (!this._loaded) return;
     this.renderSpaces(view);
     const files = this.rootNotes(view);
     let dock = this.docks.get(view);
+    /* The first drawing of a pane is not a change, so it does not move. */
+    const seen = this.dockSeen.has(view);
+    this.dockSeen.add(view);
+    const motion = seen && !this.folding && this.motion();
+    /* A dock still fading out goes at once if a new one is needed. */
+    this.leavingDocks.get(view)?.remove();
+    this.leavingDocks.delete(view);
     if (!files.length) {
-      dock?.remove();
       this.docks.delete(view);
+      if (!dock) return;
+      if (!motion || !dock.isConnected) return dock.remove();
+      /* The last note left: the whole panel fades, as a closing section. */
+      this.leavingDocks.set(view, dock);
+      const fade = dock.animate([{ opacity: 1 }, { opacity: 0, offset: 0.6 }, { opacity: 0 }], {
+        duration: FOLD_MS,
+        easing: "linear",
+        fill: "forwards",
+      });
+      fade.finished.then(
+        () => dock.remove(),
+        () => {}
+      );
       return;
     }
     const collapsed = this.isCollapsed("root");
@@ -973,16 +1069,37 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       view.containerEl.insertBefore(dock, this.spaceDots.get(view)?.parentElement === view.containerEl ? this.spaceDots.get(view) : null);
       this.docks.set(view, dock);
     }
+    /* The dock is rebuilt whole, so its rows are matched by path, and the
+       heading by itself: it slides when the panel grows or shrinks. */
+    const before = motion ? this.dockRects(dock) : null;
+    for (const a of this.dockGlides.get(view) || []) a.cancel();
     dock.dataset.key = key;
     dock.empty();
     dock.toggleClass("is-collapsed", collapsed);
     const heading = this.headingFor(view, "root");
     dock.appendChild(heading);
     this.syncHeading(heading);
-    if (collapsed) return;
-    const list = dock.createDiv({ cls: DOCK_CLASS + "-list" });
-    for (const file of files) this.dockRow(view, list, file);
-    this.syncDockActive();
+    if (!collapsed) {
+      const list = dock.createDiv({ cls: DOCK_CLASS + "-list" });
+      for (const file of files) this.dockRow(view, list, file);
+      this.syncDockActive();
+    }
+    if (!before) return;
+    const after = this.dockRects(dock);
+    const gone = [...before].filter(([path]) => !after.has(path)).map(([, row]) => row);
+    this.dockGlides.set(view, this.shift(before, after, gone, dock));
+  }
+
+  /* The dock's heading and rows, by path, with where they are. */
+  dockRects(dock) {
+    const rows = new Map();
+    const heading = dock.querySelector(":scope > ." + HEADING_CLASS);
+    if (heading) rows.set("", { el: heading, rect: heading.getBoundingClientRect() });
+    dock.querySelectorAll("." + DOCK_CLASS + "-list > .tree-item").forEach((el) => {
+      const path = el.querySelector(".nav-file-title")?.dataset.path;
+      if (path) rows.set(path, { el, rect: el.getBoundingClientRect() });
+    });
+    return rows;
   }
 
   /* Opens, previews, drags and right-clicks like an explorer row. */
@@ -1226,7 +1343,7 @@ class FolderDrawerSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Move todos")
-      .setDesc("Move each todo note by its do date: today or earlier into the source folder, later into the later folder. Only notes at the root or in those two folders move.")
+      .setDesc("Move each todo note by its do date: today or earlier into the source folder, later into the later folder. Only notes at the root or in those two folders move; one whose date is cleared goes back to the root.")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.moveTodos).onChange(async (value) => {
           this.plugin.settings.moveTodos = value;

@@ -61,12 +61,14 @@ Settings → Folder Drawer:
 - **Inbox values**, **Todo values**: which values put a note in each section.
 - **Move todos** (off by default, since it moves files): a todo note files
   itself by its **Do date property**: today or earlier into the source folder,
-  later into the **Later folder**. Only notes at the root or in those two
-  folders move. The note open in the active tab waits until you open another,
-  so a new note keeps its selected title. A todo that arrives in the source
-  folder, filed there or dragged there, gets today as its do date. One dragged
-  from the source folder to the later folder without a future do date gets
-  this Sunday (next Sunday, on a Sunday).
+  later into the **Later folder**. Only notes at the vault root or in those
+  two folders move, and only once they have a date: an undated todo at the
+  root stays there until you date it or move it, and clearing the do date of
+  a todo in either folder sends it back to the root. The note open
+  in the active tab waits until you open another. A todo you move into the
+  source folder gets today as its do date; one you move into the later folder
+  without a future do date gets this Sunday (next Sunday, on a Sunday).
+  One you move from either folder back to the vault root loses its do date.
 
 - **Spaces** (on by default): the source folder and the **Later folder**
   become two spaces side by side, as in Arc, Later to the right of Today.

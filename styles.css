@@ -200,6 +200,7 @@ body.is-mobile .folder-drawer-heading {
    ---------------------------------------------------------------------- */
 
 .folder-drawer-dock {
+  position: relative;
   flex: 0 0 auto;
   max-height: 40%;
   overflow-y: auto;
@@ -530,4 +531,20 @@ body.is-mobile .nav-files-container.folder-drawer-empty::before {
 
 .folder-drawer-spaces-dot:focus-visible::after {
   box-shadow: 0 0 0 2px var(--background-modifier-border-focus);
+}
+
+/* --- Rows that just left ---------------------------------------------------
+   A copy of each row that left the list or the dock fades where the row
+   was, while the rows below slide up over its place. The layer has no size
+   and takes no events; the scrolling list or the dock clips it.
+   ---------------------------------------------------------------------- */
+
+.folder-drawer-ghosts {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  pointer-events: none;
 }
