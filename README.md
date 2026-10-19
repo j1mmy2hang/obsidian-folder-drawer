@@ -78,6 +78,10 @@ Settings → Folder Drawer:
   put in both. **Next space** and **Previous space** are commands, for
   hotkeys. Every launch opens on Today.
 
+  Later opens with a meter of how full it is: its notes against 20, as
+  "NN% full" over a thin bar that turns from green to yellow (50%), orange
+  (75%) and red (full).
+
   Each space is a whole File Explorer (Later's is a second explorer built on
   the same pane), and the two sit in a horizontal scroller with CSS scroll
   snapping. The swipe is the browser's own scrolling: it follows the

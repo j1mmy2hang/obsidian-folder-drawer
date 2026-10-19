@@ -90,6 +90,9 @@ const EMPTY_TEXT = "All clear for today.";
 /* The horizontal scroller that holds the spaces, and Later's list in it. */
 const SPACES_WRAP_CLASS = "folder-drawer-spaces-wrap";
 const LATER_CLASS = "folder-drawer-later";
+/* The bar atop Later: how full it is, against this many notes. */
+const METER_CLASS = "folder-drawer-meter";
+const LATER_CAPACITY = 20;
 /* How far a finger moves before the swipe is read as sideways or not. */
 const SWIPE_SLOP_PX = 10;
 const FOLD_EASING = "cubic-bezier(0.2, 0, 0, 1)";
@@ -859,6 +862,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       /* Every change at the root re-sorts the root, so the dock is redrawn
          here; it skips the work when nothing it shows has changed. */
       if (!space) plugin.renderDock(this);
+      else plugin.renderMeter(this);
       plugin.placeHeadings(this, firsts);
       /* A folded section keeps only the row its heading rides in, so the
          virtualiser never builds or measures the rest. */
@@ -987,6 +991,25 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     });
     this.guardDrawer(view, wrap);
     this.renderSpaces(view);
+  }
+
+  /* How full Later is: its notes against LATER_CAPACITY, as text over a
+     thin bar, green to red as it fills, at the top of Later.
+     Drawn by the list itself (styles.css), since the virtualiser removes
+     any element of the list it did not make. */
+  renderMeter(later) {
+    if (!this._loaded) return;
+    const list = later.navFileContainerEl;
+    const folder = this.folderAt(this.settings.laterFolder);
+    if (!list || !folder) return;
+    let count = 0;
+    const walk = (f) => f.children.forEach((c) => (c instanceof TFolder ? walk(c) : c.extension === "md" && count++));
+    walk(folder);
+    const pct = Math.round((count / LATER_CAPACITY) * 100);
+    list.addClass(METER_CLASS);
+    list.setAttr("data-meter", pct + "% full");
+    list.setAttr("data-meter-level", pct >= 100 ? "full" : pct >= 75 ? "high" : pct >= 50 ? "mid" : "low");
+    list.style.setProperty("--folder-drawer-meter", String(Math.min(pct, 100) / 100));
   }
 
   unmountSpaces(view) {
