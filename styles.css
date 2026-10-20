@@ -507,9 +507,13 @@ body.is-mobile .nav-files-container.folder-drawer-empty::before {
   padding-bottom: var(--size-4-4);
 }
 
-/* Two classes, to outweigh Obsidian's button:not(.clickable-icon). */
-.folder-drawer-spaces .folder-drawer-spaces-dot {
+/* Three classes, to outweigh Obsidian's button rules: on a tablet,
+   .is-tablet button:not(.clickable-icon) pads every button 20px a side,
+   which tripled the gap between dots, and .mobile-tap paints a tap. */
+.folder-drawer-spaces .folder-drawer-spaces-dot.folder-drawer-spaces-dot {
   all: unset;
+  box-sizing: border-box;
+  padding: 0;
   display: flex;
   align-items: center;
   justify-content: center;
