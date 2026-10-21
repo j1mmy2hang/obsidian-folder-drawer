@@ -324,6 +324,12 @@ body.is-mobile .nav-files-container.folder-drawer-empty::before {
   flex-direction: column;
 }
 
+/* Room under the last note in both spaces: clear of the 32px bottom fade,
+   with a little air past it. */
+.folder-drawer-spaces-wrap-track .nav-files-container {
+  padding-bottom: 40px;
+}
+
 .folder-drawer-later > .nav-header {
   display: none;
 }
@@ -504,7 +510,7 @@ body.is-mobile .nav-files-container.folder-drawer-empty::before {
 
 .is-mobile.is-floating-nav.is-phone .workspace-drawer .folder-drawer-spaces-wrap .folder-drawer-spaces-wrap-track .nav-files-container.nav-files-container {
   padding-top: var(--size-4-2);
-  padding-bottom: var(--size-4-4);
+  padding-bottom: var(--size-4-8);
 }
 
 /* Three classes, to outweigh Obsidian's button rules: on a tablet,
