@@ -196,14 +196,27 @@ body.is-mobile .folder-drawer-heading {
    stay at the bottom of the pane. The pane is a flex column and the list
    grows to fill it, so the dock needs no positioning of its own. Its
    padding repeats the list's, so its rows and heading line up with the
-   list's. It scrolls on its own past 40% of the pane.
+   list's. It has no cap: it rises as notes pile up, and scrolls only once
+   the pane is full, its rows fading out through the bottom padding.
    ---------------------------------------------------------------------- */
+
+.nav-files-container:has(~ .folder-drawer-dock),
+.folder-drawer-spaces-wrap:has(~ .folder-drawer-dock) {
+  flex-basis: 0;
+}
 
 .folder-drawer-dock {
   position: relative;
-  flex: 0 0 auto;
-  max-height: 40%;
+  /* Shrinks only when the pane runs out of room, so it never spills past
+     the pane's bottom edge. The list above takes what is left (basis 0,
+     below), so it gives way first. */
+  flex: 0 1 auto;
+  min-height: 0;
   overflow-y: auto;
+  /* The mask covers the bottom padding only, so a resting last row stays
+     solid and only rows scrolling past it fade. */
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent);
   /* The list's left edge, built from the same numbers: text column minus
      the bleed, which is core's 12px when no snippet sets them (a phone's
      drawer is not .mod-left-split, so sidebar-insets never reaches it). */

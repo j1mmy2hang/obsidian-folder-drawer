@@ -4,6 +4,8 @@ An Obsidian plugin that turns the File Explorer into a few short lists, each
 under its own heading:
 
 - **Todo**: notes in the source folder marked `todo`;
+- **Recurring**: every todo also marked `recurring` (and not `done`),
+  wherever it lives. These have no do date, so Move todos never files them;
 - **Inbox**: notes in the source folder to read, by a value such as `clipping`;
 - **Mind**: the rest of the source folder, the things still being worked out;
 - **Projects**: every note marked `project/in-progress`, wherever it lives;
@@ -51,14 +53,14 @@ Settings → Folder Drawer:
 - **Project tag**: which value lists a note under Projects.
 - **Project property**: the frontmatter list every value is read from
   (default `descriptive`). Empty means the note's tags.
-- **Projects heading**, **Todo heading**, **Inbox heading**, **Mind heading**,
+- **Projects heading**, **Todo heading**, **Recurring heading**, **Inbox heading**, **Mind heading**,
   **Root heading**: each heading's text.
 - **Heading link**, **Todo heading link**: a note the heading opens when
   clicked. A file name (found anywhere in the vault) or a vault path.
   Cmd/Ctrl-click opens it in a new tab. Leave it empty for a heading that folds.
 - **Source folder**: the folder whose notes fill Todo, Inbox and Mind. Empty is
   the vault root.
-- **Inbox values**, **Todo values**: which values put a note in each section.
+- **Inbox values**, **Todo values**, **Recurring values**: which values put a note in each section.
 - **Move todos** (off by default, since it moves files): a todo note files
   itself by its **Do date property**: today or earlier into the source folder,
   later into the **Later folder**. Only notes at the vault root or in those

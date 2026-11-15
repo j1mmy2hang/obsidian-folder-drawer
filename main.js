@@ -7,6 +7,9 @@
  *
  *   TODO      — source notes whose `descriptive` list holds "todo"; the
  *               heading opens todo.md.md
+ *   RECURRING — every note in the vault whose `descriptive` list holds both
+ *               "todo" and "recurring" and not "done". They have no do date
+ *               and are never filed by one; Move To Note keeps them in today/
  *   INBOX     — source notes to read (clippings, AI-written notes, research
  *               overviews), by a value in their `descriptive` list
  *   MIND      — the rest of the source folder (the vault root, or the one
@@ -66,6 +69,11 @@
  * row it measures, so nothing moves that Obsidian does not know about.
  */
 
+const ROOT_EXTRAS = new Set(["canvas", "pdf"]);
+/* Root files never listed in the root dock. desktop.canvas is the Desktop
+   Canvas board, a view of the inbox rather than an item in it. */
+const ROOT_EXCLUDED = new Set(["desktop.canvas"]);
+
 const { Plugin, PluginSettingTab, Setting, TFile, TFolder, Keymap, Menu, moment, normalizePath, getAllTags, debounce, setIcon } = require("obsidian");
 
 const ACTIVE_CLASS = "folder-drawer-active";
@@ -116,6 +124,11 @@ const DEFAULT_SETTINGS = {
   todoValues: ["todo"],
   todoHeading: "Todo",
   todoLink: "todo.md.md",
+  /* Todos that also hold one of these repeat and carry no do date. They are
+     listed under the recurring heading wherever they live, like projects,
+     and Move todos leaves them alone (Move To Note keeps them in today/). */
+  recurringValues: ["recurring"],
+  recurringHeading: "Recurring",
   /* Move todo notes between the source folder and laterFolder by the date
      in doDateProperty. Off by default: it moves files. */
   moveTodos: false,
@@ -160,6 +173,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     /* view → each section's full list of items, before any folding. */
     this.sections = new WeakMap();
     this.projects = new Set();
+    this.recurring = new Set();
     this.rootFiles = new Set();
     /* Each space's todo, inbox and mind notes, filled in the same pass. */
     this.bySpace = [];
@@ -231,9 +245,15 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     this.registerEvent(this.app.vault.on("create", now));
     this.registerEvent(this.app.vault.on("delete", now));
     this.registerEvent(
+      /* The metadata cache moves a note's entry to its new path in its own
+         rename handler, which runs after this one: until then the note reads
+         as no todo, and arrive would leave it undated. Wait a microtask. */
       this.app.vault.on("rename", (file, oldPath) => {
-        this.arrive(file, oldPath);
-        now(file);
+        Promise.resolve().then(() => {
+          if (!this._loaded) return;
+          this.arrive(file, oldPath);
+          now(file);
+        });
       })
     );
 
@@ -583,16 +603,25 @@ module.exports = class FolderDrawerPlugin extends Plugin {
   }
 
   allSets() {
-    return [this.projects, this.rootFiles, ...this.bySpace.flatMap((s) => [s.todo, s.inbox, s.loose])];
+    return [this.projects, this.recurring, this.rootFiles, ...this.bySpace.flatMap((s) => [s.todo, s.inbox, s.loose])];
   }
 
-  /* Projects anywhere in the vault; inbox notes in a space's folder only. */
+  /* Projects and recurring todos anywhere in the vault; inbox notes in a
+     space's folder only. */
   scan() {
     this.projects = new Set();
+    this.recurring = new Set();
     this.rootFiles = new Set();
     const rules = this.rules();
     this.bySpace = rules.sources.map(() => ({ todo: new Set(), inbox: new Set(), loose: new Set() }));
     for (const file of this.app.vault.getMarkdownFiles()) this.file(file, rules);
+    for (const file of this.app.vault.getRoot().children) if (this.rootOnly(file)) this.rootFiles.add(file);
+  }
+
+  /* Canvases and PDFs belong only in the root dock: they carry no
+     properties, so no other section could ever claim them. */
+  rootOnly(file) {
+    return file instanceof TFile && ROOT_EXTRAS.has(file.extension) && !!file.parent?.isRoot() && !ROOT_EXCLUDED.has(file.path);
   }
 
   rules() {
@@ -601,12 +630,29 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       want: normalize(this.settings.projectTag),
       inboxWant: new Set(this.settings.inboxValues.map(normalize).filter(Boolean)),
       todoWant: new Set(this.settings.todoValues.map(normalize).filter(Boolean)),
+      recurringWant: new Set(this.settings.recurringValues.map(normalize).filter(Boolean)),
       key: this.settings.projectProperty.trim(),
     };
   }
 
+  /* A note's values in the project property (or its tags), normalized. */
+  values(meta) {
+    if (!meta) return [];
+    const key = this.settings.projectProperty.trim();
+    return (key ? [].concat(meta.frontmatter?.[key] ?? []) : getAllTags(meta) || [])
+      .filter((v) => typeof v === "string")
+      .map(normalize);
+  }
+
+  /* A todo that repeats: it holds a todo value and a recurring value, and
+     is not done. */
+  isRecurring(values, { todoWant, recurringWant } = this.rules()) {
+    return values.some((v) => todoWant.has(v)) && values.some((v) => recurringWant.has(v)) && !values.includes("done");
+  }
+
   /* Adds one note to the lists it belongs in. */
-  file(file, { sources, want, inboxWant, todoWant, key }) {
+  file(file, rules) {
+    const { sources, want, inboxWant, todoWant } = rules;
     /* A note on its way elsewhere shows up only once it arrives, not for a
        moment where it was. */
     const to = this.moving?.get(file);
@@ -616,10 +662,9 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     else if (file.parent?.isRoot()) this.rootFiles.add(file);
     const meta = this.app.metadataCache.getFileCache(file);
     if (!meta) return;
-    const values = (key ? [].concat(meta.frontmatter?.[key] ?? []) : getAllTags(meta) || [])
-      .filter((v) => typeof v === "string")
-      .map(normalize);
+    const values = this.values(meta);
     if (want && values.some((v) => v === want || v.startsWith(want + "/"))) this.projects.add(file);
+    else if (this.isRecurring(values, rules)) this.recurring.add(file);
     else if (lists && values.some((v) => todoWant.has(v))) lists.todo.add(file);
     else if (lists && values.some((v) => inboxWant.has(v))) lists.inbox.add(file);
   }
@@ -630,7 +675,10 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     const sets = this.allSets();
     const before = sets.map((set) => set.has(file));
     for (const set of sets) set.delete(file);
-    if (file.extension === "md" && this.app.vault.getAbstractFileByPath(file.path) === file) this.file(file, this.rules());
+    if (this.app.vault.getAbstractFileByPath(file.path) === file) {
+      if (file.extension === "md") this.file(file, this.rules());
+      else if (this.rootOnly(file) && !this.spaceFolders()[0].isRoot()) this.rootFiles.add(file);
+    }
     return sets.some((set, i) => set.has(file) !== before[i]);
   }
 
@@ -660,14 +708,13 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     return folder instanceof TFolder ? folder : null;
   }
 
+  /* A todo that files itself by its do date. A recurring one has no do date
+     and is filed by Move To Note instead, so it is left alone here. */
   isTodo(meta) {
     if (!meta || !meta.frontmatter) return false;
-    const todoWant = new Set(this.settings.todoValues.map(normalize).filter(Boolean));
-    const key = this.settings.projectProperty.trim();
-    return (key ? [].concat(meta.frontmatter[key] ?? []) : getAllTags(meta) || [])
-      .filter((v) => typeof v === "string")
-      .map(normalize)
-      .some((v) => todoWant.has(v));
+    const rules = this.rules();
+    const values = this.values(meta);
+    return values.some((v) => rules.todoWant.has(v)) && !this.isRecurring(values, rules);
   }
 
   /* A todo moved by hand gets a do date that keeps it where it was put:
@@ -817,7 +864,8 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       /* If another plugin wrapped this wrapper, unloading cannot unhook it;
          the guard makes it inert instead. */
       if (!plugin._loaded) return items;
-      const { projects } = plugin;
+      const { projects, recurring } = plugin;
+      const away = (item) => item && (projects.has(item.file) || recurring.has(item.file));
       const space = plugin.spaceOf(this);
       const folders = plugin.spaceFolders();
       const source = folders[space] || folders[0];
@@ -825,12 +873,12 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       if (!folder || !folder.isRoot()) {
         /* The source folder's notes are listed at the root instead. */
         if (folder === source) return items.filter((item) => !(item && item.file instanceof TFile));
-        return items.filter((item) => !(item && projects.has(item.file)));
+        return items.filter((item) => !away(item));
       }
 
       plugin.glide(this);
       const sourceItems = source.isRoot() ? items : original.call(this, source);
-      const loose = sourceItems.filter((item) => item && item.file instanceof TFile && !projects.has(item.file));
+      const loose = sourceItems.filter((item) => item && item.file instanceof TFile && !away(item));
       const todoItems = loose.filter((item) => todo.has(item.file));
       const mind = loose.filter((item) => !inbox.has(item.file) && !todo.has(item.file));
       const inboxItems = loose.filter((item) => inbox.has(item.file));
@@ -844,21 +892,26 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       }
       const compare = COMPARE[this.sortOrder] || COMPARE.alphabetical;
       /* Projects are what is in progress now: they belong to Today. */
-      const borrowed = (space ? [] : [...projects])
-        .sort(compare)
-        .map((file) => this.fileItems[file.path])
-        .filter(Boolean);
+      const borrow = (set) =>
+        (space ? [] : [...set])
+          .sort(compare)
+          .map((file) => this.fileItems[file.path])
+          .filter(Boolean);
+      const borrowed = borrow(projects);
+      /* Recurring todos are part of every day: they belong to Today too. */
+      const repeats = borrow(recurring);
       /* Skip rows a file-hider has switched off: they take no space, so a
          heading parked in one would have no band to sit in. */
       const first = (list) => list.find((item) => item.el && item.el.style.display !== "none");
       /* Key order is list order: the first key's seam is the top one. */
       const firsts = {
         todo: first(todoItems),
+        recurring: first(repeats),
         inbox: first(inboxItems),
         mind: first(mind),
         projects: first(borrowed),
       };
-      plugin.sections.set(this, { todo: todoItems, mind, inbox: inboxItems, projects: borrowed });
+      plugin.sections.set(this, { todo: todoItems, recurring: repeats, mind, inbox: inboxItems, projects: borrowed });
       /* Every change at the root re-sorts the root, so the dock is redrawn
          here; it skips the work when nothing it shows has changed. */
       if (!space) plugin.renderDock(this);
@@ -868,7 +921,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
          virtualiser never builds or measures the rest. */
       const shown = (section, list) =>
         plugin.isCollapsed(section) ? (firsts[section] ? [firsts[section]] : []) : list;
-      const list = shown("todo", todoItems).concat(shown("inbox", inboxItems), shown("mind", mind), shown("projects", borrowed));
+      const list = shown("todo", todoItems).concat(shown("recurring", repeats), shown("inbox", inboxItems), shown("mind", mind), shown("projects", borrowed));
       /* What the list holds, drawn or not, so a glide can tell a row that
          left from one only scrolled out of the drawn window. */
       plugin.listed.set(this, new Set(list.map((item) => item.el).filter(Boolean)));
@@ -1113,7 +1166,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     const hidden = this.app.plugins?.plugins?.["hide-files"]?.hidden;
     const compare = COMPARE[view.sortOrder] || COMPARE.alphabetical;
     return [...this.rootFiles]
-      .filter((file) => !this.projects.has(file) && !(hidden && hidden.has(file.path)))
+      .filter((file) => !this.projects.has(file) && !this.recurring.has(file) && !(hidden && hidden.has(file.path)))
       .sort(compare);
   }
 
@@ -1203,7 +1256,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
       cls: "tree-item-self nav-file-title tappable is-clickable",
       attr: { "data-path": file.path, draggable: "true" },
     });
-    self.createDiv({ cls: "tree-item-inner nav-file-title-content", text: file.extension === "md" ? file.basename : file.name });
+    self.createDiv({ cls: "tree-item-inner nav-file-title-content", text: file.extension === "md" || file.extension === "canvas" ? file.basename : file.name });
     const workspace = this.app.workspace;
     const open = (evt, newTab) => {
       workspace.getLeaf(newTab || Keymap.isModEvent(evt)).openFile(file);
@@ -1309,7 +1362,7 @@ module.exports = class FolderDrawerPlugin extends Plugin {
     if (!headings) this.headings.set(view, (headings = new Map()));
     let heading = headings.get(section);
     if (!heading) {
-      const text = { root: this.settings.rootHeading, todo: this.settings.todoHeading, mind: this.settings.mindHeading, inbox: this.settings.inboxHeading, projects: this.settings.heading }[section];
+      const text = { root: this.settings.rootHeading, todo: this.settings.todoHeading, recurring: this.settings.recurringHeading, mind: this.settings.mindHeading, inbox: this.settings.inboxHeading, projects: this.settings.heading }[section];
       heading = createDiv({ cls: HEADING_CLASS });
       heading.dataset.section = section;
       heading.createSpan({ cls: HEADING_CLASS + "-label", text });
@@ -1436,6 +1489,19 @@ class FolderDrawerSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Recurring values")
+      .setDesc("Todos anywhere in the vault that also hold one of these, separated by commas, and not done, are listed under the recurring heading. Move todos leaves them where they are.")
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.recurringValues.join(", "))
+          .setValue(this.plugin.settings.recurringValues.join(", "))
+          .onChange(async (value) => {
+            this.plugin.settings.recurringValues = value.split(",").map(normalize).filter(Boolean);
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Move todos")
       .setDesc("Move each todo note by its do date: today or earlier into the source folder, later into the later folder. Only notes at the root or in those two folders move; one whose date is cleared goes back to the root.")
       .addToggle((toggle) =>
@@ -1492,6 +1558,7 @@ class FolderDrawerSettingTab extends PluginSettingTab {
 
     for (const [key, name, desc] of [
       ["todoHeading", "Todo heading", "The heading above the todo notes."],
+      ["recurringHeading", "Recurring heading", "The heading above the recurring todos."],
       ["mindHeading", "Mind heading", "The heading above the source folder's notes."],
       ["inboxHeading", "Inbox heading", "The heading above the inbox notes."],
       ["rootHeading", "Root heading", "The heading above the vault root's notes, when the source folder is another one."],
